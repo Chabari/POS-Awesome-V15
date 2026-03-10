@@ -1,5 +1,10 @@
 <template>
 	<v-app class="container1" :class="rtlClasses">
+		<PinLoginScreen
+			ref="pinLogin"
+			:pos-profile="posProfile"
+			@authenticated="handlePinAuthenticated"
+		/>
 		<AppLoadingOverlay :visible="globalLoading" />
 		<UpdatePrompt />
 		<v-main class="main-content">
@@ -46,6 +51,7 @@ import Payments from "./components/payments/Pay.vue";
 import ClosingDialog from "./components/pos/ClosingDialog.vue";
 import AppLoadingOverlay from "./components/ui/LoadingOverlay.vue";
 import UpdatePrompt from "./components/ui/UpdatePrompt.vue";
+import PinLoginScreen from "./components/ui/PinLoginScreen.vue";
 import { useLoading } from "./composables/useLoading.js";
 import { usePosShift } from "./composables/usePosShift.js";
 import { loadingState, initLoadingSources, setSourceProgress, markSourceLoaded } from "./utils/loading.js";
@@ -160,6 +166,7 @@ export default {
 		ClosingDialog,
 		AppLoadingOverlay,
 		UpdatePrompt,
+		PinLoginScreen,
 	},
 	mounted() {
 		this.remove_frappe_nav();
@@ -261,6 +268,13 @@ export default {
 					this.posProfile = data.pos_profile || {};
 					if (navigator.onLine) {
 						this.refreshTaxInclusiveSetting();
+					}
+				});
+
+				// Listen for lock session requests (e.g. from Navbar lock button)
+				this.eventBus.on("lock_session", () => {
+					if (this.$refs.pinLogin && this.posProfile?.custom_enable_pin_login) {
+						this.$refs.pinLogin.lockSession();
 					}
 				});
 
@@ -491,6 +505,12 @@ export default {
 			}
 		},
 
+		handlePinAuthenticated(data) {
+			console.log("PIN login authenticated:", data.full_name);
+			// Session is already switched by the pin_login API.
+			// No reload needed — the PinLoginScreen hides itself and the app continues.
+		},
+
 		handleUpdateAfterDelete() {
 			// Handle update after delete
 		},
@@ -521,6 +541,7 @@ export default {
 		if (this.eventBus) {
 			this.eventBus.off("pending_invoices_changed");
 			this.eventBus.off("data-loaded");
+			this.eventBus.off("lock_session");
 		}
 		window.removeEventListener("resize", this.adjust_frappe_sidebar_offset);
 	},

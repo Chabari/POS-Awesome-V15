@@ -302,6 +302,7 @@ fixtures = [
                     "POS Settings-posa_return_validity_days",
                     "POS Invoice-posa_return_valid_upto",
                     "Sales Invoice-posa_return_valid_upto",
+                    "POS Profile-custom_enable_pin_login",
                 ),
             ]
         ],
