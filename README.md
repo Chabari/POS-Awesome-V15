@@ -12,7 +12,7 @@
 Follow these steps to install and start using POS Awesome:
 
 1. **Install the app** in your bench:
-    1. `bench get-app https://github.com/defendicon/POS-Awesome-V15`
+    1. `bench get-app https://github.com/Chabari/POS-Awesome-V15`
     2. `bench setup requirements`
     3. `bench build --app posawesome`
     4. `bench restart`
