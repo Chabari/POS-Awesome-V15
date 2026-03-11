@@ -20,7 +20,13 @@ def _resolve_cache_ttl(ttl: Optional[int]) -> int:
 
 
 def _cache_wrapper(store: Dict[int, Callable[..., Any]], ttl: Optional[int], fn: Callable[..., Any]):
-    """Memoize the redis cache decorator for a given TTL to avoid re-wrapping."""
+    """Memoize the redis cache decorator for a given TTL to avoid re-wrapping.
+
+    When *ttl* is ``None`` caching is bypassed entirely and the raw function
+    is returned so that callers always get fresh data."""
+
+    if ttl is None:
+        return fn
 
     resolved_ttl = _resolve_cache_ttl(ttl)
     cached = store.get(resolved_ttl)
@@ -452,8 +458,15 @@ class ItemDetailAggregator:
         self.exchange_rate = self._compute_exchange_rate()
 
     def _resolve_ttl(self) -> Optional[int]:
-        """Convert the POS profile cache duration to seconds."""
+        """Convert the POS profile cache duration to seconds.
 
+        Returns ``None`` when server-side caching is disabled so that the
+        individual data fetchers skip Redis entirely and always query the
+        database for fresh prices and stock levels.
+        """
+
+        if not self.pos_profile.get("posa_use_server_cache"):
+            return None
         ttl = self.pos_profile.get("posa_server_cache_duration")
         if not ttl:
             return None
