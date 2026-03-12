@@ -507,8 +507,13 @@ export default {
 
 		handlePinAuthenticated(data) {
 			console.log("PIN login authenticated:", data.full_name);
-			// Session is already switched by the pin_login API.
-			// No reload needed — the PinLoginScreen hides itself and the app continues.
+			// Keep client-side session state in sync after login_as()
+			if (data.user) {
+				frappe.session.user = data.user;
+				if (frappe.boot && frappe.boot.user) {
+					frappe.boot.user.name = data.user;
+				}
+			}
 		},
 
 		handleUpdateAfterDelete() {

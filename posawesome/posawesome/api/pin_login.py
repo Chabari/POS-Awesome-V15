@@ -2,6 +2,15 @@ import frappe
 from frappe import _
 
 
+@frappe.whitelist(allow_guest=True, methods=["GET"])
+def get_session_csrf():
+    """Return the current session's CSRF token (GET-safe, no CSRF required)."""
+    return {
+        "csrf_token": frappe.sessions.get_csrf_token(),
+        "user": frappe.session.user,
+    }
+
+
 @frappe.whitelist(allow_guest=True)
 def get_cashiers(pos_profile=None):
     """Return list of users allowed for the given POS Profile."""

@@ -230,6 +230,26 @@ export default {
 			};
 		},
 
+		async _refreshCsrfToken() {
+			try {
+				const resp = await fetch(
+					"/api/method/posawesome.posawesome.api.pin_login.get_session_csrf",
+					{ method: "GET", credentials: "same-origin", cache: "no-store" },
+				);
+				if (resp.ok) {
+					const data = await resp.json();
+					if (data.message?.csrf_token) {
+						frappe.csrf_token = data.message.csrf_token;
+					}
+					if (data.message?.user) {
+						frappe.session.user = data.message.user;
+					}
+				}
+			} catch (err) {
+				console.warn("Failed to refresh CSRF token", err);
+			}
+		},
+
 		async submitPin() {
 			if (this.isLoggingIn || !this.selectedCashier) return;
 			this.isLoggingIn = true;
@@ -245,6 +265,11 @@ export default {
 				if (r.message && r.message.csrf_token) {
 					frappe.csrf_token = r.message.csrf_token;
 				}
+				if (r.message?.user) {
+					frappe.session.user = r.message.user;
+				}
+				// Verify CSRF token is in sync with the new session
+				await this._refreshCsrfToken();
 				this.isAuthenticated = true;
 				this.isLocked = false;
 				this.visible = false;
@@ -254,6 +279,11 @@ export default {
 				});
 				this._resetInactivityTimer();
 			} catch (e) {
+				// If pin_login partially succeeded (server switched session but
+				// response was lost), the sid cookie may already point to the
+				// new session while frappe.csrf_token is stale.  Refresh it so
+				// subsequent requests don't fail with "Invalid Request".
+				await this._refreshCsrfToken();
 				const msg = e?.message || e?._server_messages || "Incorrect PIN";
 				let errorText = "Incorrect PIN";
 				try {
