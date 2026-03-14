@@ -26,6 +26,19 @@ export function usePosShift(openDialog) {
 				if (r.message) {
 					pos_profile.value = r.message.pos_profile;
 					pos_opening_shift.value = r.message.pos_opening_shift;
+
+					// If shift is from a previous day and daily close is enforced,
+					// force the user to close it before proceeding.
+					if (r.message.requires_closing) {
+						eventBus?.emit("register_pos_profile", r.message);
+						eventBus?.emit("show_message", {
+							title: "You must close the previous day's shift before opening a new one.",
+							color: "warning",
+						});
+						get_closing_data({ force_close: true });
+						return;
+					}
+
 					if (pos_profile.value.taxes_and_charges) {
 						frappe.call({
 							method: "frappe.client.get",
@@ -90,7 +103,7 @@ export function usePosShift(openDialog) {
 			});
 	}
 
-	function get_closing_data() {
+	function get_closing_data(options = {}) {
 		const cachedOpeningShift = getOpeningStorage()?.pos_opening_shift;
 		if (!pos_opening_shift.value && cachedOpeningShift) {
 			pos_opening_shift.value = cachedOpeningShift;
@@ -105,6 +118,9 @@ export function usePosShift(openDialog) {
 			)
 			.then((r) => {
 				if (r.message) {
+					if (options.force_close) {
+						r.message.force_close = true;
+					}
 					eventBus?.emit("open_ClosingDialog", r.message);
 				}
 			});

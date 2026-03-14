@@ -860,6 +860,7 @@ export default {
 	mixins: [format],
 	data: () => ({
 		closingDialog: false,
+		forceClose: false,
 		itemsPerPage: 20,
 		dialog_data: {},
 		pos_profile: "",
@@ -941,6 +942,10 @@ export default {
 			}
 		},
 		close_dialog() {
+			if (this.forceClose) {
+				alert(this.__("You must close the previous day's shift before continuing."));
+				return;
+			}
 			this.closingDialog = false;
 			this.overview = null;
 			this.overviewLoading = false;
@@ -1530,6 +1535,7 @@ export default {
 		this.headers = [...this.baseHeaders];
 		this.eventBus.on("open_ClosingDialog", (data) => {
 			this.closingDialog = true;
+			this.forceClose = !!data.force_close;
 			this.dialog_data = data;
 			this.fetchOverview(data.pos_opening_shift);
 		});

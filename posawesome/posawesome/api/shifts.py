@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import json
 import frappe
-from frappe.utils import cint, nowdate
+from frappe.utils import cint, nowdate, getdate, get_datetime
 from frappe import _
 from .utilities import get_version
 
@@ -90,7 +90,7 @@ def check_opening_shift(user):
             "docstatus": 1,
             "status": "Open",
         },
-        fields=["name", "pos_profile"],
+        fields=["name", "pos_profile", "period_start_date"],
         order_by="period_start_date desc",
     )
     data = ""
@@ -98,6 +98,14 @@ def check_opening_shift(user):
         data = {}
         data["pos_opening_shift"] = frappe.get_doc("POS Opening Shift", open_vouchers[0]["name"])
         update_opening_shift_data(data, open_vouchers[0]["pos_profile"])
+
+        # Check if shift must be closed daily
+        pos_profile_doc = data["pos_profile"]
+        if pos_profile_doc.get("custom_close_shift_daily"):
+            shift_date = getdate(open_vouchers[0]["period_start_date"])
+            today = getdate(nowdate())
+            if shift_date < today:
+                data["requires_closing"] = True
     return data
 
 
