@@ -93,6 +93,28 @@ def check_opening_shift(user):
         fields=["name", "pos_profile", "period_start_date"],
         order_by="period_start_date desc",
     )
+
+    # If no open shift for this user, check for an open shift on the user's default POS Profile
+    if not open_vouchers:
+        default_profiles = frappe.get_all(
+            "POS Profile User",
+            filters={"user": user, "default": 1, "parenttype": "POS Profile"},
+            fields=["parent"],
+        )
+        if default_profiles:
+            default_profile_names = [d.parent for d in default_profiles]
+            open_vouchers = frappe.db.get_all(
+                "POS Opening Shift",
+                filters={
+                    "pos_profile": ["in", default_profile_names],
+                    "pos_closing_shift": ["is", "not set"],
+                    "docstatus": 1,
+                    "status": "Open",
+                },
+                fields=["name", "pos_profile", "period_start_date"],
+                order_by="period_start_date desc",
+            )
+
     data = ""
     if len(open_vouchers) > 0:
         data = {}
