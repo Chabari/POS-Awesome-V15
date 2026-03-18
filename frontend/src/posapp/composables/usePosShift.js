@@ -8,6 +8,29 @@ import {
 	setTaxTemplate,
 } from "../../offline/index.js";
 
+/**
+ * Sync frappe.csrf_token with the current server session.
+ * After a PIN login, in-flight responses from the previous session may
+ * set Set-Cookie: sid=<old>, reverting the browser cookie.  This fetch
+ * ensures the CSRF token matches whatever session the cookie now holds.
+ */
+async function syncCsrfToken() {
+	try {
+		const resp = await fetch(
+			"/api/method/posawesome.posawesome.api.pin_login.get_session_csrf",
+			{ method: "GET", credentials: "same-origin", cache: "no-store" },
+		);
+		if (resp.ok) {
+			const data = await resp.json();
+			if (data.message?.csrf_token) {
+				frappe.csrf_token = data.message.csrf_token;
+			}
+		}
+	} catch (e) {
+		console.warn("Failed to sync CSRF token", e);
+	}
+}
+
 export function usePosShift(openDialog) {
 	const { proxy } = getCurrentInstance();
 	const eventBus = proxy?.eventBus;
@@ -103,14 +126,15 @@ export function usePosShift(openDialog) {
 			});
 	}
 
-	function get_closing_data(options = {}) {
+	async function get_closing_data(options = {}) {
 		const cachedOpeningShift = getOpeningStorage()?.pos_opening_shift;
 		if (!pos_opening_shift.value && cachedOpeningShift) {
 			pos_opening_shift.value = cachedOpeningShift;
 		}
 		if (!pos_opening_shift.value) {
-			return Promise.resolve();
+			return;
 		}
+		await syncCsrfToken();
 		return frappe
 			.call(
 				"posawesome.posawesome.doctype.pos_closing_shift.pos_closing_shift.make_closing_shift_from_opening",
@@ -126,7 +150,8 @@ export function usePosShift(openDialog) {
 			});
 	}
 
-	function submit_closing_pos(data) {
+	async function submit_closing_pos(data) {
+		await syncCsrfToken();
 		frappe
 			.call("posawesome.posawesome.doctype.pos_closing_shift.pos_closing_shift.submit_closing_shift", {
 				closing_shift: data,
