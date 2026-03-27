@@ -702,6 +702,58 @@
 			</div>
 		</v-card>
 
+		<!-- Tray Deposit Summary -->
+		<v-card
+			v-if="trayDepositSummary.totalTrays > 0"
+			flat
+			class="cards mb-0 mt-2 pa-2 tray-deposit-card"
+		>
+			<div class="d-flex align-center mb-2">
+				<v-icon color="green-darken-2" size="small" class="mr-2">mdi-sprout</v-icon>
+				<span class="text-subtitle-2 font-weight-bold" style="color: #d32f2f;">
+					{{ __("Tray Deposit") }}
+				</span>
+			</div>
+			<v-row dense class="pa-0">
+				<v-col cols="4">
+					<div class="tray-stat">
+						<div class="tray-stat-label">{{ __("Trays") }}</div>
+						<div class="tray-stat-value text-blue">{{ trayDepositSummary.totalTrays }}</div>
+					</div>
+				</v-col>
+				<v-col cols="4">
+					<div class="tray-stat">
+						<div class="tray-stat-label">{{ __("Loose") }}</div>
+						<div class="tray-stat-value text-orange">{{ trayDepositSummary.totalLoose }}</div>
+					</div>
+				</v-col>
+				<v-col cols="4">
+					<div class="tray-stat">
+						<div class="tray-stat-label">{{ __("Deposit") }}</div>
+						<div class="tray-stat-value text-green font-weight-bold">
+							{{ formatCurrency(trayDepositSummary.depositAmount) }}
+						</div>
+					</div>
+				</v-col>
+			</v-row>
+			<div v-if="trayDepositSummary.trayDetails.length" class="mt-2">
+				<div
+					v-for="(td, idx) in trayDepositSummary.trayDetails"
+					:key="idx"
+					class="tray-detail-row"
+				>
+					<span class="text-caption font-weight-medium">{{ td.tray_label }}</span>
+					<span class="text-caption text-medium-emphasis ml-2">{{ td.tray_type }}</span>
+					<v-chip size="x-small" :color="td.is_whole_tray ? 'blue' : 'orange'" class="ml-2" variant="flat">
+						{{ td.is_whole_tray ? __("Whole") : __("{0} pcs", [td.qty]) }}
+					</v-chip>
+					<span v-if="td.is_whole_tray && td.deposit_amount" class="text-caption ml-auto font-weight-bold text-green">
+						{{ formatCurrency(td.deposit_amount) }}
+					</span>
+				</div>
+			</div>
+		</v-card>
+
 		<!-- Action Buttons -->
 		<v-card flat class="cards mb-0 mt-3 pa-0">
 			<v-row align="start" no-gutters>
@@ -903,6 +955,28 @@ export default {
 			set(value) {
 				this.invoiceStore.setInvoiceDoc(value);
 			},
+		},
+		// Tray deposit summary from all cart items
+		trayDepositSummary() {
+			const items = this.invoiceStore.items || [];
+			let totalTrays = 0;
+			let totalLoose = 0;
+			let depositAmount = 0;
+			const trayDetails = [];
+
+			items.forEach((item) => {
+				if (item.posa_tray_summary && item.posa_picked_trays) {
+					totalTrays += item.posa_tray_summary.total_whole_trays || 0;
+					totalLoose += item.posa_tray_summary.total_loose_pieces || 0;
+					depositAmount += item.posa_tray_summary.total_tray_deposit || 0;
+
+					item.posa_picked_trays.forEach((t) => {
+						trayDetails.push(t);
+					});
+				}
+			});
+
+			return { totalTrays, totalLoose, depositAmount, trayDetails };
 		},
 		// Get currency symbol for given or current currency
 		currencySymbol() {
@@ -1352,6 +1426,36 @@ export default {
 		},
 	},
 	methods: {
+		getBatchItemsMissingTraySelection() {
+			const items = this.invoiceStore.items || [];
+			return items.filter((item) => {
+				if (!item?.has_batch_no) return false;
+				if (item?.qty <= 0) return false;
+				const pickedSeedlings = item?.posa_tray_summary?.total_seedlings || 0;
+				const hasPickedTrays = Array.isArray(item?.posa_picked_trays) && item.posa_picked_trays.length > 0;
+				return !hasPickedTrays || pickedSeedlings <= 0;
+			});
+		},
+		validateBatchTraySelections() {
+			const invalidItems = this.getBatchItemsMissingTraySelection();
+			if (!invalidItems.length) {
+				return true;
+			}
+
+			const itemLabels = invalidItems
+				.map((item) => item.item_name || item.item_code)
+				.filter(Boolean)
+				.join(", ");
+
+			this.eventBus.emit("show_message", {
+				title: itemLabels
+					? __("Pick trays or seedlings before payment for: {0}", [itemLabels])
+					: __("Pick trays or seedlings before payment for all batch items"),
+				color: "error",
+			});
+			frappe.utils.play_sound("error");
+			return false;
+		},
 		extractSubmissionErrorMessage(exc) {
 			if (!exc) {
 				return __("Unknown error");
@@ -1409,6 +1513,39 @@ export default {
 			this.$nextTick(() => {
 				this.eventBus.emit("focus_item_search");
 			});
+		},
+		async deductTraySeedings() {
+			// Collect all picked trays from invoice items
+			const items = this.invoiceStore.items || [];
+			const allPickedTrays = [];
+
+			items.forEach((item) => {
+				if (item.posa_picked_trays && item.posa_picked_trays.length) {
+					item.posa_picked_trays.forEach((t) => {
+						allPickedTrays.push({
+							tray: t.tray,
+							qty: t.qty,
+							is_whole_tray: t.is_whole_tray,
+							propagation_batch: t.propagation_batch,
+						});
+					});
+				}
+			});
+
+			if (!allPickedTrays.length) return;
+
+			try {
+				await frappe.call({
+					method: "posawesome.posawesome.api.batch_trays.deduct_tray_seedlings",
+					args: {
+						picked_trays: allPickedTrays,
+						item_code: items[0]?.item_code || "",
+						customer: this.invoice_doc?.customer || "",
+					},
+				});
+			} catch (e) {
+				console.error("Failed to deduct tray seedlings:", e);
+			}
 		},
 		finishSubmissionNavigation(clearInvoice = false) {
 			this.back_to_invoice();
@@ -1483,6 +1620,10 @@ export default {
 		async submit(event, payment_received = false, print = false) {
 			this.loading = true;
 			try {
+				if (!this.validateBatchTraySelections()) {
+					return;
+				}
+
 				// For return invoices, ensure payment amounts are negative
 				if (this.invoice_doc.is_return) {
 					this.ensureReturnPaymentsAreNegative();
@@ -1772,6 +1913,10 @@ export default {
 					color: "success",
 				});
 				frappe.utils.play_sound("submit");
+
+				// Deduct tray seedlings after successful submission
+				await this.deductTraySeedings();
+
 				const submittedItems = Array.isArray(this.invoice_doc.items) ? this.invoice_doc.items : [];
 				updateLocalStock(submittedItems);
 				stockCoordinator.applyInvoiceConsumption(submittedItems, {
@@ -2963,5 +3108,39 @@ export default {
 .payment-method-btn:focus-visible::before,
 .payment-method-btn:active::before {
 	opacity: 0 !important;
+}
+
+/* Tray Deposit Section */
+.tray-deposit-card {
+	border: 2px solid #d32f2f;
+	border-radius: 8px;
+	background: #fff5f5;
+}
+
+.tray-stat {
+	text-align: center;
+}
+
+.tray-stat-label {
+	font-size: 11px;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.tray-stat-value {
+	font-size: 18px;
+	font-weight: 700;
+}
+
+.tray-detail-row {
+	display: flex;
+	align-items: center;
+	padding: 4px 0;
+	border-bottom: 1px solid var(--border-color, #f1f5f9);
+}
+
+.tray-detail-row:last-child {
+	border-bottom: none;
 }
 </style>

@@ -59,7 +59,11 @@ export function withPerf(label, fn) {
 export function scheduleFrame(callback) {
 	const scheduler =
 		typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
-	return scheduler(callback);
+	if (typeof callback === "function") {
+		return scheduler(callback);
+	}
+	// When called without a callback, return a Promise (supports `await scheduleFrame()`)
+	return new Promise((resolve) => scheduler(resolve));
 }
 
 let longTaskCleanup = null;

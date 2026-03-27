@@ -2246,6 +2246,10 @@ export default {
 				batch_no: item.batch_no,
 				posa_notes: item.posa_notes,
 				posa_delivery_date: this.formatDateForBackend(item.posa_delivery_date),
+				// Tray picking data (frontend-only, not persisted by backend)
+				...(item.posa_picked_trays && { posa_picked_trays: item.posa_picked_trays }),
+				...(item.posa_tray_summary && { posa_tray_summary: item.posa_tray_summary }),
+				...(item.posa_tray_pricing && { posa_tray_pricing: item.posa_tray_pricing }),
 			};
 
 			// Handle currency conversion for rates and amounts
@@ -2675,6 +2679,19 @@ export default {
 
 			const manualOverrides = this._collectManualRateOverrides(this.items);
 
+			// Snapshot tray data from current items before reloading from backend
+			// because the backend does not persist these frontend-only fields.
+			const trayDataByRowId = new Map();
+			(this.items || []).forEach((item) => {
+				if (item.posa_row_id && (item.posa_picked_trays || item.posa_tray_summary || item.posa_tray_pricing)) {
+					trayDataByRowId.set(item.posa_row_id, {
+						posa_picked_trays: item.posa_picked_trays,
+						posa_tray_summary: item.posa_tray_summary,
+						posa_tray_pricing: item.posa_tray_pricing,
+					});
+				}
+			});
+
 			const r = await frappe.call({
 				method: "frappe.client.get",
 				args: { doctype, name },
@@ -2690,6 +2707,17 @@ export default {
 				if (manualOverrides.length) {
 					this._applyManualRateOverridesToDoc(doc, manualOverrides);
 				}
+
+				// Re-attach tray data to backend items before loading
+				if (trayDataByRowId.size && Array.isArray(doc.items)) {
+					doc.items.forEach((item) => {
+						const saved = item.posa_row_id && trayDataByRowId.get(item.posa_row_id);
+						if (saved) {
+							Object.assign(item, saved);
+						}
+					});
+				}
+
 				await this.load_invoice(doc, {
 					preserveAdditionalDiscountPercentage: true,
 				});
