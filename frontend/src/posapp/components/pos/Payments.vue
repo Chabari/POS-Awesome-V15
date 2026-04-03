@@ -729,10 +729,19 @@
 				</v-col>
 				<v-col cols="4">
 					<div class="tray-stat">
-						<div class="tray-stat-label">{{ __("Deposit") }}</div>
-						<div class="tray-stat-value text-green font-weight-bold">
-							{{ formatCurrency(trayDepositSummary.depositAmount) }}
-						</div>
+						<div class="tray-stat-label">{{ __("Tray. Deposit") }}</div>
+						<v-text-field
+							density="compact"
+							variant="outlined"
+							color="green-darken-2"
+							class="tray-deposit-input"
+							hide-details
+							v-model="tray_deposit_amount_received"
+							type="number"
+							min="0"
+							:prefix="currencySymbol(invoice_doc ? invoice_doc.currency : undefined)"
+							@change="onTrayDepositAmountChange"
+						></v-text-field>
 					</div>
 				</v-col>
 			</v-row>
@@ -892,7 +901,6 @@ import {
 import { useInvoiceStore } from "../../stores/invoiceStore.js";
 import { useCustomersStore } from "../../stores/customersStore.js";
 import { storeToRefs } from "pinia";
-import stockCoordinator from "../../utils/stockCoordinator.js";
 import { parseBooleanSetting } from "../../utils/stock.js";
 
 export default {
@@ -945,6 +953,7 @@ export default {
 			backgroundStatusCheck: null,
 			paymentVisible: false,
 			_shortcutHandlers: {},
+			tray_deposit_amount_received: 0, // Amount of deposit received for tray deposits
 		};
 	},
 	computed: {
@@ -1424,6 +1433,12 @@ export default {
 			this.is_cashback = true;
 			this.is_credit_return = false;
 		},
+		// Auto-populate deposit received with calculated deposit when trays change
+		'trayDepositSummary.depositAmount'(newVal) {
+			if (newVal > 0 && this.tray_deposit_amount_received === 0) {
+				this.tray_deposit_amount_received = newVal;
+			}
+		},
 	},
 	methods: {
 		getBatchItemsMissingTraySelection() {
@@ -1435,6 +1450,10 @@ export default {
 				const hasPickedTrays = Array.isArray(item?.posa_picked_trays) && item.posa_picked_trays.length > 0;
 				return !hasPickedTrays || pickedSeedlings <= 0;
 			});
+		},
+		onTrayDepositAmountChange() {
+			const val = parseFloat(this.tray_deposit_amount_received) || 0;
+			this.tray_deposit_amount_received = val < 0 ? 0 : val;
 		},
 		validateBatchTraySelections() {
 			const invalidItems = this.getBatchItemsMissingTraySelection();
@@ -1766,6 +1785,34 @@ export default {
 			if (this.invoice_doc.is_return) {
 				this.ensureReturnPaymentsAreNegative();
 			}
+
+			// Ensure batch_no and tray data from store items are synced to invoice_doc items
+			const storeItems = this.invoiceStore.items || [];
+			if (Array.isArray(this.invoice_doc.items) && storeItems.length) {
+				const storeItemMap = new Map();
+				storeItems.forEach((si) => {
+					if (si.posa_row_id) storeItemMap.set(si.posa_row_id, si);
+				});
+				this.invoice_doc.items.forEach((item) => {
+					const storeItem = item.posa_row_id && storeItemMap.get(item.posa_row_id);
+					if (storeItem) {
+						if (storeItem.batch_no && !item.batch_no) {
+							item.batch_no = storeItem.batch_no;
+						}
+						if (storeItem.posa_picked_trays && !item.posa_picked_trays) {
+							item.posa_picked_trays = typeof storeItem.posa_picked_trays === 'string'
+								? storeItem.posa_picked_trays
+								: JSON.stringify(storeItem.posa_picked_trays);
+						}
+						if (storeItem.posa_tray_summary && !item.posa_tray_summary) {
+							item.posa_tray_summary = typeof storeItem.posa_tray_summary === 'string'
+								? storeItem.posa_tray_summary
+								: JSON.stringify(storeItem.posa_tray_summary);
+						}
+					}
+				});
+			}
+
 			let totalPayedAmount = 0;
 			this.invoice_doc.payments.forEach((payment) => {
 				payment.amount = this.flt(payment.amount);
@@ -1790,6 +1837,18 @@ export default {
 			if (this.invoice_doc) {
 				this.invoice_doc.paid_change = paidChange;
 				this.invoice_doc.credit_change = creditChange;
+				// Attach tray deposit data to the invoice document
+				if (this.trayDepositSummary.totalTrays > 0) {
+					this.invoice_doc.posa_tray_deposit_received = this.flt(this.tray_deposit_amount_received);
+					this.invoice_doc.posa_tray_deposit_calculated = this.flt(this.trayDepositSummary.depositAmount);
+					this.invoice_doc.posa_tray_deposit_summary = JSON.stringify({
+						totalTrays: this.trayDepositSummary.totalTrays,
+						totalLoose: this.trayDepositSummary.totalLoose,
+						calculatedDeposit: this.trayDepositSummary.depositAmount,
+						receivedDeposit: this.flt(this.tray_deposit_amount_received),
+						trayDetails: this.trayDepositSummary.trayDetails,
+					});
+				}
 			}
 
 			if (!this.invoice_doc.is_return) {
@@ -1804,6 +1863,16 @@ export default {
 				redeemed_customer_credit: this.redeemed_customer_credit,
 				customer_credit_dict: this.customer_credit_dict,
 				is_cashback: this.is_cashback,
+				tray_deposit_amount_received: this.flt(this.tray_deposit_amount_received),
+				tray_deposit_summary: this.trayDepositSummary.totalTrays > 0
+					? {
+						totalTrays: this.trayDepositSummary.totalTrays,
+						totalLoose: this.trayDepositSummary.totalLoose,
+						calculatedDeposit: this.trayDepositSummary.depositAmount,
+						receivedDeposit: this.flt(this.tray_deposit_amount_received),
+						trayDetails: this.trayDepositSummary.trayDetails,
+					}
+					: null,
 			};
 
 			if (isOffline()) {
@@ -1914,23 +1983,18 @@ export default {
 				});
 				frappe.utils.play_sound("submit");
 
-				// Deduct tray seedlings after successful submission
-				await this.deductTraySeedings();
+				// Tray deduction is now handled server-side in before_submit hook
 
 				const submittedItems = Array.isArray(this.invoice_doc.items) ? this.invoice_doc.items : [];
 				updateLocalStock(submittedItems);
-				stockCoordinator.applyInvoiceConsumption(submittedItems, {
-					source: "invoice",
-				});
-				const submittedCodes = submittedItems
-					.map((item) => (item ? item.item_code : null))
-					.filter((code) => code !== undefined && code !== null);
-				this.eventBus.emit("invoice_stock_adjusted", {
-					items: submittedItems,
-					item_codes: submittedCodes,
-					timestamp: Date.now(),
-				});
+
 				this.finishSubmissionNavigation(true);
+
+				// Reload items from server after a short delay to pick up
+				// the actual stock quantities once the DB transaction commits.
+				setTimeout(() => {
+					this.eventBus.emit("force_reload_items");
+				}, 1000);
 				this.scheduleBackgroundStatusCheck(responseInvoiceName, r.message?.doctype);
 			} catch (exc) {
 				console.error("Error submitting invoice:", exc);
@@ -2952,6 +3016,11 @@ export default {
 				this.initializeReturnValidity(invoice_doc);
 				this.loyalty_amount = 0;
 				this.redeemed_customer_credit = 0;
+				// Initialize tray deposit amount from calculated summary
+				this.$nextTick(() => {
+					const deposit = this.trayDepositSummary.depositAmount || 0;
+					this.tray_deposit_amount_received = deposit;
+				});
 				// Only get addresses if customer exists
 				if (invoice_doc.customer) {
 					this.get_addresses();
@@ -3011,6 +3080,7 @@ export default {
 				this.is_return = false;
 				this.is_credit_return = false;
 				this.return_valid_upto_date = null;
+				this.tray_deposit_amount_received = 0;
 			});
 			// Scroll to top when payment view is shown
 			this.eventBus.on("show_payment", this.handleShowPayment);
@@ -3131,6 +3201,22 @@ export default {
 .tray-stat-value {
 	font-size: 18px;
 	font-weight: 700;
+}
+
+.tray-deposit-input {
+	margin-top: 2px;
+}
+
+.tray-deposit-input :deep(.v-field) {
+	min-height: 32px;
+	font-size: 14px;
+	font-weight: 700;
+	color: #2e7d32;
+}
+
+.tray-deposit-input :deep(.v-field__input) {
+	padding-top: 4px;
+	padding-bottom: 4px;
 }
 
 .tray-detail-row {

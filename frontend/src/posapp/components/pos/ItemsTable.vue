@@ -147,6 +147,120 @@
 								</div>
 							</div>
 
+							<!-- Batch Number Section -->
+							<div class="form-section" v-if="item.has_batch_no || item.batch_no">
+								<div class="section-header d-flex align-center justify-space-between">
+									<div class="d-flex align-center">
+										<v-icon size="small" class="section-icon"
+											>mdi-package-variant-closed</v-icon
+										>
+										<span class="section-title" style="color: #d32f2f; font-weight: 700;">{{ __("Batch Information") }}</span>
+									</div>
+									<v-btn
+										size="small"
+										color="red-darken-2"
+										variant="flat"
+										class="pick-batch-btn"
+										@click.stop="openTrayPicker(item)"
+									>
+										<v-icon size="small" class="mr-1">mdi-sprout</v-icon>
+										{{ __("Pick Batch Trays") }}
+									</v-btn>
+								</div>
+
+								<!-- Picked Trays Summary -->
+								<div v-if="item.posa_picked_trays && item.posa_picked_trays.length" class="picked-trays-summary">
+									<div class="d-flex flex-wrap gap-2 mb-2">
+										<v-chip color="blue" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-tray-full</v-icon>
+											{{ __("Trays: {0}", [item.posa_tray_summary?.total_whole_trays || 0]) }}
+										</v-chip>
+										<v-chip color="orange" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-grain</v-icon>
+											{{ __("Loose: {0}", [item.posa_tray_summary?.total_loose_pieces || 0]) }}
+										</v-chip>
+										<v-chip color="green" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-counter</v-icon>
+											{{ __("Total: {0}", [item.posa_tray_summary?.total_seedlings || 0]) }}
+										</v-chip>
+										<v-chip color="purple" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-cash</v-icon>
+											{{ __("Deposit: {0}", [memoizedFormatCurrency(item.posa_tray_summary?.total_tray_deposit || 0)]) }}
+										</v-chip>
+									</div>
+								</div>
+								<div class="form-row">
+									<div class="form-field">
+										<v-text-field
+											density="compact"
+											variant="outlined"
+											color="primary"
+											:label="frappe._('Batch No. Available QTY')"
+											class="pos-themed-input"
+											hide-details
+											:model-value="memoizedFormatFloat(item.actual_batch_qty)"
+											disabled
+											prepend-inner-icon="mdi-package-variant"
+										></v-text-field>
+									</div>
+									<div class="form-field">
+										<v-text-field
+											density="compact"
+											variant="outlined"
+											color="primary"
+											:label="frappe._('Batch No Expiry Date')"
+											class="pos-themed-input"
+											hide-details
+											v-model="item.batch_no_expiry_date"
+											disabled
+											prepend-inner-icon="mdi-calendar-clock"
+										></v-text-field>
+									</div>
+									<div class="form-field">
+										<v-autocomplete
+											v-model="item.batch_no"
+											:items="item.batch_no_data"
+											item-title="batch_no"
+											item-value="batch_no"
+											variant="outlined"
+											density="compact"
+											color="primary"
+											class="pos-themed-input"
+											:label="frappe._('Batch No')"
+											@update:model-value="setBatchQty(item, $event)"
+											:readonly="isBatchSelectionLocked(item)"
+											:disabled="isBatchSelectionLocked(item)"
+											hide-details
+											prepend-inner-icon="mdi-package-variant-closed"
+										>
+											<template v-slot:item="{ props, item }">
+												<v-list-item v-bind="props">
+													<v-list-item-title
+														v-html="item.raw.batch_no"
+													></v-list-item-title>
+													<v-list-item-subtitle class="d-flex align-center">
+														<span
+															v-html="
+																`Available QTY  '${item.raw.available_qty ?? item.raw.batch_qty}' - Expiry Date ${item.raw.expiry_date}`
+															"
+														></span>
+														<v-chip
+															v-if="item.raw.is_expired"
+															color="error"
+															size="x-small"
+															variant="flat"
+															class="ml-2"
+														>
+															{{ __("Expired") }}
+														</v-chip>
+													</v-list-item-subtitle>
+												</v-list-item>
+											</template>
+										</v-autocomplete>
+									</div>
+								</div>
+							</div>
+
 							<!-- Pricing Section -->
 							<div class="form-section">
 								<div class="section-header">
@@ -415,119 +529,6 @@
 								</div>
 							</div>
 
-							<!-- Batch Number Section -->
-							<div class="form-section" v-if="item.has_batch_no || item.batch_no">
-								<div class="section-header d-flex align-center justify-space-between">
-									<div class="d-flex align-center">
-										<v-icon size="small" class="section-icon"
-											>mdi-package-variant-closed</v-icon
-										>
-										<span class="section-title" style="color: #d32f2f; font-weight: 700;">{{ __("Batch Information") }}</span>
-									</div>
-									<v-btn
-										size="small"
-										color="red-darken-2"
-										variant="flat"
-										class="pick-batch-btn"
-										@click.stop="openTrayPicker(item)"
-									>
-										<v-icon size="small" class="mr-1">mdi-sprout</v-icon>
-										{{ __("Pick Batch Trays") }}
-									</v-btn>
-								</div>
-
-								<!-- Picked Trays Summary -->
-								<div v-if="item.posa_picked_trays && item.posa_picked_trays.length" class="picked-trays-summary">
-									<div class="d-flex flex-wrap gap-2 mb-2">
-										<v-chip color="blue" size="small" variant="flat">
-											<v-icon start size="x-small">mdi-tray-full</v-icon>
-											{{ __("Trays: {0}", [item.posa_tray_summary?.total_whole_trays || 0]) }}
-										</v-chip>
-										<v-chip color="orange" size="small" variant="flat">
-											<v-icon start size="x-small">mdi-grain</v-icon>
-											{{ __("Loose: {0}", [item.posa_tray_summary?.total_loose_pieces || 0]) }}
-										</v-chip>
-										<v-chip color="green" size="small" variant="flat">
-											<v-icon start size="x-small">mdi-counter</v-icon>
-											{{ __("Total: {0}", [item.posa_tray_summary?.total_seedlings || 0]) }}
-										</v-chip>
-										<v-chip color="purple" size="small" variant="flat">
-											<v-icon start size="x-small">mdi-cash</v-icon>
-											{{ __("Deposit: {0}", [memoizedFormatCurrency(item.posa_tray_summary?.total_tray_deposit || 0)]) }}
-										</v-chip>
-									</div>
-								</div>
-								<div class="form-row">
-									<div class="form-field">
-										<v-text-field
-											density="compact"
-											variant="outlined"
-											color="primary"
-											:label="frappe._('Batch No. Available QTY')"
-											class="pos-themed-input"
-											hide-details
-											:model-value="memoizedFormatFloat(item.actual_batch_qty)"
-											disabled
-											prepend-inner-icon="mdi-package-variant"
-										></v-text-field>
-									</div>
-									<div class="form-field">
-										<v-text-field
-											density="compact"
-											variant="outlined"
-											color="primary"
-											:label="frappe._('Batch No Expiry Date')"
-											class="pos-themed-input"
-											hide-details
-											v-model="item.batch_no_expiry_date"
-											disabled
-											prepend-inner-icon="mdi-calendar-clock"
-										></v-text-field>
-									</div>
-									<div class="form-field">
-										<v-autocomplete
-											v-model="item.batch_no"
-											:items="item.batch_no_data"
-											item-title="batch_no"
-											item-value="batch_no"
-											variant="outlined"
-											density="compact"
-											color="primary"
-											class="pos-themed-input"
-											:label="frappe._('Batch No')"
-											@update:model-value="setBatchQty(item, $event)"
-											:readonly="isBatchSelectionLocked(item)"
-											:disabled="isBatchSelectionLocked(item)"
-											hide-details
-											prepend-inner-icon="mdi-package-variant-closed"
-										>
-											<template v-slot:item="{ props, item }">
-												<v-list-item v-bind="props">
-													<v-list-item-title
-														v-html="item.raw.batch_no"
-													></v-list-item-title>
-													<v-list-item-subtitle class="d-flex align-center">
-														<span
-															v-html="
-																`Available QTY  '${item.raw.available_qty ?? item.raw.batch_qty}' - Expiry Date ${item.raw.expiry_date}`
-															"
-														></span>
-														<v-chip
-															v-if="item.raw.is_expired"
-															color="error"
-															size="x-small"
-															variant="flat"
-															class="ml-2"
-														>
-															{{ __("Expired") }}
-														</v-chip>
-													</v-list-item-subtitle>
-												</v-list-item>
-											</template>
-										</v-autocomplete>
-									</div>
-								</div>
-							</div>
 
 							<!-- Delivery Date Section -->
 							<div
@@ -1272,7 +1273,8 @@ export default {
 			this.showTrayPicker = true;
 		},
 		isBatchSelectionLocked(item) {
-			return Boolean(item?.posa_picked_trays?.length && item?.batch_no);
+			//return Boolean(item?.posa_picked_trays?.length && item?.batch_no);
+			return true; // Temporarily disable batch selection to prevent confusion, will re-enable in future update with clearer UI
 		},
 		async onTraysPicked(summary) {
 			const item = this.trayPickerTargetItem;

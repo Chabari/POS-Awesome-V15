@@ -77,6 +77,7 @@
 						clearable
 						hide-details
 					></v-text-field>
+					<div class="text-caption mt-2">{{ __("Please note that if the check box is checked, it indicates that the tray is fully picked.") }}</div>
 				</div>
 
 				<!-- Trays Table -->
@@ -333,7 +334,7 @@ export default {
 			if (qty > tray.current_occupancy) qty = tray.current_occupancy;
 
 			let picked = false;
-			if (qty === tray.current_occupancy && qty > 0) {
+			if (qty === tray.current_occupancy && qty > 100) {
 				picked = true;
 			}
 

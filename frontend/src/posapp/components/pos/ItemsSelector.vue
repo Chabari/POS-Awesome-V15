@@ -2642,6 +2642,7 @@ export default {
 
 			try {
 				if (candidates.length) {
+					this.cancelItemDetailsRequest();
 					await this.update_items_details(candidates, { forceRefresh: true });
 				}
 			} catch (error) {
