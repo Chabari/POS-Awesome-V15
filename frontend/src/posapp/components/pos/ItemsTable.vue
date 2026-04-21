@@ -147,6 +147,120 @@
 								</div>
 							</div>
 
+							<!-- Batch Number Section -->
+							<div class="form-section" v-if="item.has_batch_no || item.batch_no">
+								<div class="section-header d-flex align-center justify-space-between">
+									<div class="d-flex align-center">
+										<v-icon size="small" class="section-icon"
+											>mdi-package-variant-closed</v-icon
+										>
+										<span class="section-title" style="color: #d32f2f; font-weight: 700;">{{ __("Batch Information") }}</span>
+									</div>
+									<v-btn
+										size="small"
+										color="red-darken-2"
+										variant="flat"
+										class="pick-batch-btn"
+										@click.stop="openTrayPicker(item)"
+									>
+										<v-icon size="small" class="mr-1">mdi-sprout</v-icon>
+										{{ __("Pick Batch Trays") }}
+									</v-btn>
+								</div>
+
+								<!-- Picked Trays Summary -->
+								<div v-if="item.posa_picked_trays && item.posa_picked_trays.length" class="picked-trays-summary">
+									<div class="d-flex flex-wrap gap-2 mb-2">
+										<v-chip color="blue" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-tray-full</v-icon>
+											{{ __("Trays: {0}", [item.posa_tray_summary?.total_whole_trays || 0]) }}
+										</v-chip>
+										<v-chip color="orange" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-grain</v-icon>
+											{{ __("Loose: {0}", [item.posa_tray_summary?.total_loose_pieces || 0]) }}
+										</v-chip>
+										<v-chip color="green" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-counter</v-icon>
+											{{ __("Total: {0}", [item.posa_tray_summary?.total_seedlings || 0]) }}
+										</v-chip>
+										<v-chip color="purple" size="small" variant="flat">
+											<v-icon start size="x-small">mdi-cash</v-icon>
+											{{ __("Deposit: {0}", [memoizedFormatCurrency(item.posa_tray_summary?.total_tray_deposit || 0)]) }}
+										</v-chip>
+									</div>
+								</div>
+								<div class="form-row">
+									<div class="form-field">
+										<v-text-field
+											density="compact"
+											variant="outlined"
+											color="primary"
+											:label="frappe._('Batch No. Available QTY')"
+											class="pos-themed-input"
+											hide-details
+											:model-value="memoizedFormatFloat(item.actual_batch_qty)"
+											disabled
+											prepend-inner-icon="mdi-package-variant"
+										></v-text-field>
+									</div>
+									<div class="form-field">
+										<v-text-field
+											density="compact"
+											variant="outlined"
+											color="primary"
+											:label="frappe._('Batch No Expiry Date')"
+											class="pos-themed-input"
+											hide-details
+											v-model="item.batch_no_expiry_date"
+											disabled
+											prepend-inner-icon="mdi-calendar-clock"
+										></v-text-field>
+									</div>
+									<div class="form-field">
+										<v-autocomplete
+											v-model="item.batch_no"
+											:items="item.batch_no_data"
+											item-title="batch_no"
+											item-value="batch_no"
+											variant="outlined"
+											density="compact"
+											color="primary"
+											class="pos-themed-input"
+											:label="frappe._('Batch No')"
+											@update:model-value="setBatchQty(item, $event)"
+											:readonly="isBatchSelectionLocked(item)"
+											:disabled="isBatchSelectionLocked(item)"
+											hide-details
+											prepend-inner-icon="mdi-package-variant-closed"
+										>
+											<template v-slot:item="{ props, item }">
+												<v-list-item v-bind="props">
+													<v-list-item-title
+														v-html="item.raw.batch_no"
+													></v-list-item-title>
+													<v-list-item-subtitle class="d-flex align-center">
+														<span
+															v-html="
+																`Available QTY  '${item.raw.available_qty ?? item.raw.batch_qty}' - Expiry Date ${item.raw.expiry_date}`
+															"
+														></span>
+														<v-chip
+															v-if="item.raw.is_expired"
+															color="error"
+															size="x-small"
+															variant="flat"
+															class="ml-2"
+														>
+															{{ __("Expired") }}
+														</v-chip>
+													</v-list-item-subtitle>
+												</v-list-item>
+											</template>
+										</v-autocomplete>
+									</div>
+								</div>
+							</div>
+
 							<!-- Pricing Section -->
 							<div class="form-section">
 								<div class="section-header">
@@ -415,82 +529,6 @@
 								</div>
 							</div>
 
-							<!-- Batch Number Section -->
-							<div class="form-section" v-if="item.has_batch_no || item.batch_no">
-								<div class="section-header">
-									<v-icon size="small" class="section-icon"
-										>mdi-package-variant-closed</v-icon
-									>
-									<span class="section-title">{{ __("Batch Information") }}</span>
-								</div>
-								<div class="form-row">
-									<div class="form-field">
-										<v-text-field
-											density="compact"
-											variant="outlined"
-											color="primary"
-											:label="frappe._('Batch No. Available QTY')"
-											class="pos-themed-input"
-											hide-details
-											:model-value="memoizedFormatFloat(item.actual_batch_qty)"
-											disabled
-											prepend-inner-icon="mdi-package-variant"
-										></v-text-field>
-									</div>
-									<div class="form-field">
-										<v-text-field
-											density="compact"
-											variant="outlined"
-											color="primary"
-											:label="frappe._('Batch No Expiry Date')"
-											class="pos-themed-input"
-											hide-details
-											v-model="item.batch_no_expiry_date"
-											disabled
-											prepend-inner-icon="mdi-calendar-clock"
-										></v-text-field>
-									</div>
-									<div class="form-field">
-										<v-autocomplete
-											v-model="item.batch_no"
-											:items="item.batch_no_data"
-											item-title="batch_no"
-											variant="outlined"
-											density="compact"
-											color="primary"
-											class="pos-themed-input"
-											:label="frappe._('Batch No')"
-											@update:model-value="setBatchQty(item, $event)"
-											hide-details
-											prepend-inner-icon="mdi-package-variant-closed"
-										>
-											<template v-slot:item="{ props, item }">
-												<v-list-item v-bind="props">
-													<v-list-item-title
-														v-html="item.raw.batch_no"
-													></v-list-item-title>
-													<v-list-item-subtitle class="d-flex align-center">
-														<span
-															v-html="
-																`Available QTY  '${item.raw.available_qty ?? item.raw.batch_qty}' - Expiry Date ${item.raw.expiry_date}`
-															"
-														></span>
-														<v-chip
-															v-if="item.raw.is_expired"
-															color="error"
-															size="x-small"
-															variant="flat"
-															class="ml-2"
-														>
-															{{ __("Expired") }}
-														</v-chip>
-													</v-list-item-subtitle>
-												</v-list-item>
-											</template>
-										</v-autocomplete>
-									</div>
-								</div>
-							</div>
 
 							<!-- Delivery Date Section -->
 							<div
@@ -530,6 +568,14 @@
 			</template>
 		</v-data-table-virtual>
 
+		<!-- Batch Tray Picker Dialog -->
+		<BatchTrayPicker
+			v-model="showTrayPicker"
+			:itemCode="trayPickerItemCode"
+			:formatCurrency="memoizedFormatCurrency"
+			@trays-picked="onTraysPicked"
+		/>
+
 		<!-- Edit name dialog -->
 		<v-dialog v-model="editNameDialog" max-width="400">
 			<v-card>
@@ -560,10 +606,12 @@ import { logComponentRender } from "../../utils/perf.js";
 import { useInvoiceStore } from "../../stores/invoiceStore.js";
 import { parseBooleanSetting } from "../../utils/stock.js";
 import CartItemRow from "./CartItemRow.vue";
+import BatchTrayPicker from "./BatchTrayPicker.vue";
 export default {
 	name: "ItemsTable",
 	components: {
 		CartItemRow,
+		BatchTrayPicker,
 	},
 	setup() {
 		const invoiceStore = useInvoiceStore();
@@ -607,6 +655,10 @@ export default {
 			editNameDialog: false,
 			editNameTarget: null,
 			editedName: "",
+			// Batch Tray Picker
+			showTrayPicker: false,
+			trayPickerItemCode: "",
+			trayPickerTargetItem: null,
 			// Container awareness properties
 			containerWidth: 0,
 			containerHeight: 0,
@@ -1215,6 +1267,79 @@ export default {
 				this.editedName = item.item_name;
 			}
 		},
+		openTrayPicker(item) {
+			this.trayPickerItemCode = item.item_code || "";
+			this.trayPickerTargetItem = item;
+			this.showTrayPicker = true;
+		},
+		isBatchSelectionLocked(item) {
+			//return Boolean(item?.posa_picked_trays?.length && item?.batch_no);
+			return true; // Temporarily disable batch selection to prevent confusion, will re-enable in future update with clearer UI
+		},
+		async onTraysPicked(summary) {
+			const item = this.trayPickerTargetItem;
+			if (!item || !summary) return;
+
+			// Store tray pick data on the item
+			item.posa_picked_trays = summary.picked_trays;
+			item.posa_tray_summary = {
+				propagation_batch: summary.propagation_batch,
+				total_whole_trays: summary.total_whole_trays,
+				total_loose_pieces: summary.total_loose_pieces,
+				total_seedlings: summary.total_seedlings,
+				total_tray_deposit: summary.total_tray_deposit,
+			};
+
+			// Set batch_no to the selected propagation batch
+			item.batch_no = summary.propagation_batch;
+
+			// Set qty to total seedlings picked
+			item.qty = summary.total_seedlings;
+
+			// Fetch pricing for tray vs loose
+			try {
+				const r = await frappe.call({
+					method: "posawesome.posawesome.api.batch_trays.get_tray_pricing",
+					args: { item_code: item.item_code },
+				});
+				const pricing = r.message || {};
+
+				if (summary.total_whole_trays > 0 && pricing.tray_rate) {
+					// If there are whole trays and a tray price exists,
+					// calculate blended rate
+					const trayAmount = summary.total_whole_trays * pricing.tray_rate;
+					const looseAmount = summary.total_loose_pieces * (pricing.piece_rate || 0);
+					const totalAmount = trayAmount + looseAmount;
+
+					if (summary.total_seedlings > 0) {
+						item.rate = totalAmount / summary.total_seedlings;
+					}
+
+					item.posa_tray_pricing = {
+						tray_rate: pricing.tray_rate,
+						piece_rate: pricing.piece_rate,
+						tray_amount: trayAmount,
+						loose_amount: looseAmount,
+						total_amount: totalAmount,
+					};
+				} else if (pricing.piece_rate) {
+					item.rate = pricing.piece_rate;
+					item.posa_tray_pricing = {
+						tray_rate: 0,
+						piece_rate: pricing.piece_rate,
+						tray_amount: 0,
+						loose_amount: summary.total_seedlings * pricing.piece_rate,
+						total_amount: summary.total_seedlings * pricing.piece_rate,
+					};
+				}
+			} catch (e) {
+				console.error("Failed to fetch tray pricing:", e);
+			}
+
+			// Trigger recalculation
+			this.invoiceStore.upsertItem(item);
+			this.trayPickerTargetItem = null;
+		},
 		handleQtyChange(item, event) {
 			const newQty = parseFloat(event.target.value) || 0;
 			if (newQty === 0) {
@@ -1351,6 +1476,22 @@ export default {
 </script>
 
 <style scoped>
+/* Batch Tray Picker styles */
+.pick-batch-btn {
+	font-weight: 700;
+	letter-spacing: 0.3px;
+	text-transform: none;
+	border-radius: 6px;
+}
+
+.picked-trays-summary {
+	background: var(--subtle-accent, #fafafa);
+	border: 1px solid var(--border-color, #e2e8f0);
+	border-radius: 8px;
+	padding: 10px 12px;
+	margin-top: 8px;
+}
+
 /* Modern table styling with clean design */
 .pos-table {
 	border-radius: 8px;

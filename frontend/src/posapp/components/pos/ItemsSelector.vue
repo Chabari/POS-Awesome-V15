@@ -416,23 +416,32 @@
 													</div>
 												</div>
 												<div class="card-item-stock">
-													<v-icon size="small" class="stock-icon">
-														mdi-package-variant
-													</v-icon>
-													<span
-														class="stock-amount"
-														:class="{
-															'negative-number': isNegative(item.actual_qty),
-														}"
+													<div class="stock-primary-line">
+														<v-icon size="small" class="stock-icon">
+															mdi-package-variant
+														</v-icon>
+														<span
+															class="stock-amount"
+															:class="{
+																'negative-number': isNegative(item.actual_qty),
+															}"
+														>
+															{{
+																memoizedFormatNumber(
+																	item.actual_qty,
+																	hide_qty_decimals ? 0 : 4,
+																) || 0
+															}}
+														</span>
+														<span class="stock-uom">{{ item.stock_uom || "" }}</span>
+													</div>
+													<div
+														v-if="getSecondaryAvailableQty(item)"
+														class="stock-secondary-line"
 													>
-														{{
-															memoizedFormatNumber(
-																item.actual_qty,
-																hide_qty_decimals ? 0 : 4,
-															) || 0
-														}}
-													</span>
-													<span class="stock-uom">{{ item.stock_uom || "" }}</span>
+														({{ memoizedFormatNumber(getSecondaryAvailableQty(item).qty, hide_qty_decimals ? 0 : 4) }}
+														{{ getSecondaryAvailableQty(item).uom }})
+													</div>
 												</div>
 											</div>
 										</div>
@@ -521,13 +530,21 @@
 									</div>
 								</template>
 								<template v-slot:item.actual_qty="{ item }">
-									<span
-										class="golden--text"
-										:class="{ 'negative-number': isNegative(item.actual_qty) }"
+									<div>
+										<span
+											class="golden--text"
+											:class="{ 'negative-number': isNegative(item.actual_qty) }"
 										>{{
 											memoizedFormatNumber(item.actual_qty, hide_qty_decimals ? 0 : 4)
-										}}</span
-									>
+										}}</span>
+										<div
+											v-if="getSecondaryAvailableQty(item)"
+											class="text-caption stock-secondary-line"
+										>
+											({{ memoizedFormatNumber(getSecondaryAvailableQty(item).qty, hide_qty_decimals ? 0 : 4) }}
+											{{ getSecondaryAvailableQty(item).uom }})
+										</div>
+									</div>
 								</template>
 							</v-data-table-virtual>
 						</div>
@@ -2507,6 +2524,27 @@ export default {
 
 			return null;
 		},
+		getSecondaryUom(item) {
+			if (!item || !Array.isArray(item.item_uoms) || item.item_uoms.length < 2) {
+				return null;
+			}
+			return item.item_uoms.find((row) => {
+				const factor = Number(row?.conversion_factor || 0);
+				return row?.uom && row.uom !== item.stock_uom && factor > 0;
+			}) || null;
+		},
+		getSecondaryAvailableQty(item) {
+			const secondary = this.getSecondaryUom(item);
+			const baseQty = this.getBaseActualQty(item) ?? item.actual_qty;
+			if (!secondary || baseQty === null || baseQty === undefined) {
+				return null;
+			}
+			const factor = Number(secondary.conversion_factor || 0);
+			if (!factor) {
+				return null;
+			}
+			return { qty: baseQty / factor, uom: secondary.uom };
+		},
 		applyReservationToItem(item) {
 			if (!item || !item.item_code) {
 				return;
@@ -2642,6 +2680,7 @@ export default {
 
 			try {
 				if (candidates.length) {
+					this.cancelItemDetailsRequest();
 					await this.update_items_details(candidates, { forceRefresh: true });
 				}
 			} catch (error) {
@@ -5480,12 +5519,27 @@ export default {
 
 .card-item-stock {
 	display: flex;
-	align-items: center;
-	gap: 6px;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
 	padding: 6px 8px;
 	background: rgba(0, 0, 0, 0.02);
 	border-radius: 6px;
 	margin-top: auto;
+}
+
+.stock-primary-line {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.stock-secondary-line {
+	font-size: 0.75rem;
+	color: var(--pos-text-secondary, #6c757d);
+	font-weight: 500;
+	margin-left: 22px;
+	white-space: nowrap;
 }
 
 .stock-icon {

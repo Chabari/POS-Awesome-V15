@@ -1,6 +1,10 @@
 {
  "charts": [],
+<<<<<<< HEAD
  "content": "[{\"id\":\"cJigdSD9mh\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">POS Awesome</span>\",\"col\":12}},{\"id\":\"4D2sc3CbN3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"POS Awesome App\",\"col\":3}},{\"id\":\"nVBkn7nfDw\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"-B_qEZqEA6\",\"type\":\"card\",\"data\":{\"card_name\":\"POS\",\"col\":4}},{\"id\":\"tsAHaUCd5l\",\"type\":\"card\",\"data\":{\"card_name\":\"Profile\",\"col\":4}},{\"id\":\"2-3HMkGou3\",\"type\":\"card\",\"data\":{\"card_name\":\"Shift\",\"col\":4}},{\"id\":\"zaVGgXl-wG\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Customer Order\",\"col\":3}},{\"id\":\"alv2neJQyU\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Repark\",\"col\":3}},{\"id\":\"CgHRZBTBDR\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Daily Sales Summary\",\"col\":3}},{\"id\":\"o9Nw1EKA2l\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Shift Sales Summary\",\"col\":3}}]",
+=======
+ "content": "[{\"id\":\"cJigdSD9mh\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">POS Awesome</span>\",\"col\":12}},{\"id\":\"4D2sc3CbN3\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"POS Awesome App\",\"col\":3}},{\"id\":\"nVBkn7nfDw\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"-B_qEZqEA6\",\"type\":\"card\",\"data\":{\"card_name\":\"POS\",\"col\":4}},{\"id\":\"tsAHaUCd5l\",\"type\":\"card\",\"data\":{\"card_name\":\"Profile\",\"col\":4}},{\"id\":\"2-3HMkGou3\",\"type\":\"card\",\"data\":{\"card_name\":\"Shift\",\"col\":4}},{\"id\":\"GdPtnrazDS\",\"type\":\"card\",\"data\":{\"card_name\":\"Delivery Charges\",\"col\":4}},{\"id\":\"cABO53xhGv\",\"type\":\"card\",\"data\":{\"card_name\":\"Offers &amp; Coupons\",\"col\":4}}]",
+>>>>>>> refs/remotes/upstream/dev
  "creation": "2022-11-29 14:33:45.038200",
  "custom_blocks": [],
  "docstatus": 0,
@@ -72,7 +76,8 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Shift",
-   "link_count": 2,
+   "link_count": 3,
+   "link_type": "DocType",
    "onboard": 0,
    "type": "Card Break"
   },
@@ -95,10 +100,25 @@
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Shift Summary Report",
+   "link_count": 0,
+   "link_to": "Shift Closing Summary",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
   }
  ],
+<<<<<<< HEAD
  "modified": "2026-03-18 06:46:49.278250",
  "modified_by": "Administrator",
+=======
+ "modified": "2026-03-18 06:23:23.765215",
+ "modified_by": "georgemukundi5@gmail.com",
+>>>>>>> refs/remotes/upstream/dev
  "module": "POSAwesome",
  "name": "POS Awesome",
  "number_cards": [],

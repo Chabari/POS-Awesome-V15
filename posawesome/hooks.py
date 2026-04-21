@@ -100,12 +100,16 @@ doc_events = {
     "Sales Invoice": {
         "validate": "posawesome.posawesome.api.invoice.validate",
         "before_submit": "posawesome.posawesome.api.invoice.before_submit",
+        "on_submit": "posawesome.posawesome.api.invoice.on_submit",
         "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
+        "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
     },
     "POS Invoice": {
         "validate": "posawesome.posawesome.api.invoice.validate",
         "before_submit": "posawesome.posawesome.api.invoice.before_submit",
+        "on_submit": "posawesome.posawesome.api.invoice.on_submit",
         "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
+        "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
     },
     "Customer": {
         "validate": "posawesome.posawesome.api.customer.validate",
@@ -303,6 +307,8 @@ fixtures = [
                     "POS Invoice-posa_return_valid_upto",
                     "Sales Invoice-posa_return_valid_upto",
                     "POS Profile-custom_enable_pin_login",
+                    "POS Profile-posa_allow_multi_currency",
+                    "POS Profile-posa_decimal_precision",
                 ),
             ]
         ],
@@ -319,19 +325,6 @@ fixtures = [
                     "Sales Invoice Reference-sales_invoice-reqd",
                     "Sales Invoice-update_outstanding_for_self-default",
                 ),
-            ]
-        ],
-    },
-    {
-        "doctype": "Custom Field",
-        "filters": [
-            [
-                "name",
-                "in",
-                [
-                    "POS Profile-posa_allow_multi_currency",
-                    "POS Profile-posa_decimal_precision",
-                ],
             ]
         ],
     },

@@ -2246,6 +2246,26 @@ export default {
 				batch_no: item.batch_no,
 				posa_notes: item.posa_notes,
 				posa_delivery_date: this.formatDateForBackend(item.posa_delivery_date),
+				// Tray picking data — serialize as JSON for backend Small Text fields
+				...(item.posa_picked_trays && {
+					posa_picked_trays: typeof item.posa_picked_trays === "string"
+						? item.posa_picked_trays
+						: JSON.stringify(item.posa_picked_trays),
+				}),
+				...(item.posa_tray_summary && {
+					posa_tray_summary: typeof item.posa_tray_summary === "string"
+						? item.posa_tray_summary
+						: JSON.stringify(item.posa_tray_summary),
+				}),
+				...(item.posa_tray_pricing && { posa_tray_pricing: item.posa_tray_pricing }),
+				// Set propagation batch from picked trays
+				...(item.posa_picked_trays && (() => {
+					const trays = Array.isArray(item.posa_picked_trays)
+						? item.posa_picked_trays
+						: [];
+					const pb = trays.find((t) => t.propagation_batch);
+					return pb ? { posa_propagation_batch: pb.propagation_batch } : {};
+				})()),
 			};
 
 			// Handle currency conversion for rates and amounts
@@ -2675,6 +2695,30 @@ export default {
 
 			const manualOverrides = this._collectManualRateOverrides(this.items);
 
+			// Snapshot tray data and batch fields from current items before reloading
+			// because the backend does not persist these frontend-only fields.
+			// batch_no_data is critical: without it set_batch_qty() clears batch_no.
+			const itemSnapshotByRowId = new Map();
+			(this.items || []).forEach((item) => {
+				if (!item.posa_row_id) return;
+				const hasTray = item.posa_picked_trays || item.posa_tray_summary || item.posa_tray_pricing;
+				const hasBatch = item.batch_no || (Array.isArray(item.batch_no_data) && item.batch_no_data.length);
+				if (hasTray || hasBatch) {
+					const snapshot = {};
+					if (item.posa_picked_trays) snapshot.posa_picked_trays = item.posa_picked_trays;
+					if (item.posa_tray_summary) snapshot.posa_tray_summary = item.posa_tray_summary;
+					if (item.posa_tray_pricing) snapshot.posa_tray_pricing = item.posa_tray_pricing;
+					if (item.batch_no) snapshot.batch_no = item.batch_no;
+					if (Array.isArray(item.batch_no_data) && item.batch_no_data.length) {
+						snapshot.batch_no_data = item.batch_no_data;
+					}
+					if (item.actual_batch_qty != null) snapshot.actual_batch_qty = item.actual_batch_qty;
+					if (item.batch_no_expiry_date) snapshot.batch_no_expiry_date = item.batch_no_expiry_date;
+					if (item.batch_no_is_expired != null) snapshot.batch_no_is_expired = item.batch_no_is_expired;
+					itemSnapshotByRowId.set(item.posa_row_id, snapshot);
+				}
+			});
+
 			const r = await frappe.call({
 				method: "frappe.client.get",
 				args: { doctype, name },
@@ -2690,6 +2734,17 @@ export default {
 				if (manualOverrides.length) {
 					this._applyManualRateOverridesToDoc(doc, manualOverrides);
 				}
+
+				// Re-attach tray data and batch_no to backend items before loading
+				if (itemSnapshotByRowId.size && Array.isArray(doc.items)) {
+					doc.items.forEach((item) => {
+						const saved = item.posa_row_id && itemSnapshotByRowId.get(item.posa_row_id);
+						if (saved) {
+							Object.assign(item, saved);
+						}
+					});
+				}
+
 				await this.load_invoice(doc, {
 					preserveAdditionalDiscountPercentage: true,
 				});
@@ -3343,6 +3398,22 @@ export default {
 			// This prevents a race condition where the dialog opens before
 			// the invoice UI has finished re-rendering with updated totals
 			await this.$nextTick();
+
+			// Ensure batch fields from store items are on invoice_doc items
+			// (safety net in case reload lost them or batch_no_data was missing)
+			if (Array.isArray(invoice_doc.items)) {
+				const storeItems = this.items || [];
+				const storeMap = new Map();
+				storeItems.forEach((si) => {
+					if (si.posa_row_id) storeMap.set(si.posa_row_id, si);
+				});
+				invoice_doc.items.forEach((item) => {
+					const si = item.posa_row_id && storeMap.get(item.posa_row_id);
+					if (si && si.batch_no && !item.batch_no) {
+						item.batch_no = si.batch_no;
+					}
+				});
+			}
 
 			console.log("Showing payment dialog with currency:", invoice_doc.currency);
 			if (typeof this.paymentVisible !== "undefined") {

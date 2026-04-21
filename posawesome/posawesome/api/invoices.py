@@ -584,6 +584,11 @@ def update_invoice(data):
 
     # Preserve provided item names for manual overrides
     overrides = {d.idx: {"item_name": d.item_name} for d in invoice_doc.items}
+    # Snapshot batch_no before set_missing_values() which may clear it
+    batch_snapshot = {}
+    for d in invoice_doc.items:
+        if d.get("batch_no"):
+            batch_snapshot[d.idx] = d.batch_no
     locked_items = {}
     if invoice_doc.is_return:
         for d in invoice_doc.items:
@@ -603,6 +608,10 @@ def update_invoice(data):
 
     # Set missing values first
     invoice_doc.set_missing_values()
+    # Restore batch_no after set_missing_values
+    for d in invoice_doc.items:
+        if d.idx in batch_snapshot and not d.get("batch_no"):
+            d.batch_no = batch_snapshot[d.idx]
     if effective_price_list:
         invoice_doc.selling_price_list = effective_price_list
 
@@ -1002,6 +1011,17 @@ def submit_invoice(invoice, data, submit_in_background=False):
     set_batch_nos_for_bundels(invoice_doc, "warehouse", throw=True)
 
     _validate_stock_on_invoice(invoice_doc)
+
+    # Ensure tray JSON fields are strings, not lists (safety net)
+    for item in invoice_doc.get("items", []):
+        for fld in ("posa_picked_trays", "posa_tray_summary"):
+            val = item.get(fld)
+            if isinstance(val, (list, dict)):
+                item.set(fld, json.dumps(val))
+    for fld in ("posa_tray_deposit_summary",):
+        val = invoice_doc.get(fld)
+        if isinstance(val, (list, dict)):
+            invoice_doc.set(fld, json.dumps(val))
 
     invoice_doc.flags.ignore_permissions = True
     frappe.flags.ignore_account_permission = True

@@ -27,6 +27,15 @@ def before_submit(doc, method):
     add_loyalty_point(doc)
     create_sales_order(doc)
     update_coupon(doc, "used")
+    # Process tray data: persist to custom fields and deduct seedlings
+    from posawesome.posawesome.api.batch_trays import process_tray_data_on_submit
+    process_tray_data_on_submit(doc)
+
+
+def on_submit(doc, method):
+    # Create draft payment entry for tray deposit after doc is committed
+    from posawesome.posawesome.api.batch_trays import create_deposit_payment_entry
+    create_deposit_payment_entry(doc)
 
 
 def before_cancel(doc, method):
@@ -35,6 +44,9 @@ def before_cancel(doc, method):
 
 def on_cancel(doc, method):
     cancel_posawesome_credit_journal_entries(doc)
+    # Reverse tray deductions and batch status
+    from posawesome.posawesome.api.batch_trays import revert_tray_data_on_cancel
+    revert_tray_data_on_cancel(doc)
 
 
 def cancel_posawesome_credit_journal_entries(doc):
