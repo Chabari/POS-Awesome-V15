@@ -1367,9 +1367,10 @@ export default {
 			if (newVal) {
 				// If credit sale is enabled, set cash payment to 0
 				this.invoice_doc.payments.forEach((payment) => {
-					if (payment.mode_of_payment.toLowerCase() === "cash") {
-						payment.amount = 0;
-					}
+					// if (payment.mode_of_payment.toLowerCase() === "cash") {
+					// 	payment.amount = 0;
+					// }
+					payment.amount = 0;
 				});
 			} else {
 				// If credit sale is disabled, set cash payment to invoice total
