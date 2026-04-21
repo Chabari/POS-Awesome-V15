@@ -16,6 +16,7 @@ def get_available_batches(item_code=None):
     Optionally filter by item_code if the item is linked to a seedling variety."""
     filters = {
         "docstatus": 1,
+        "propagation_type": "Company",
         "status": ["in", ["Ready", "Completed"]],
     }
 
