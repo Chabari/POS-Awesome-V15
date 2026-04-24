@@ -415,7 +415,7 @@
 														</span>
 													</div>
 												</div>
-												<div class="card-item-stock">
+												<div class="card-item-stock" v-if="!pos_profile.custom_remove_stock_balance_pos">
 													<div class="stock-primary-line">
 														<v-icon size="small" class="stock-icon">
 															mdi-package-variant
@@ -2047,6 +2047,12 @@ export default {
 			];
 			if (!this.pos_profile.posa_display_item_code) {
 				items_headers.splice(1, 1);
+			}
+			if (this.pos_profile.custom_remove_stock_balance_pos) {
+				const qtyIndex = items_headers.findIndex((h) => h.key === "actual_qty");
+				if (qtyIndex !== -1) {
+					items_headers.splice(qtyIndex, 1);
+				}
 			}
 
 			return items_headers;

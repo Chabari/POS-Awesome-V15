@@ -600,6 +600,46 @@
 						</div>
 					</v-col>
 					<v-col
+						cols="12"
+						v-if="is_credit_sale && pos_profile.custom_input_customer_details_pos"
+					>
+						<v-card flat class="pa-3" color="grey-lighten-4">
+							<div class="text-subtitle-2 mb-2 text-primary">
+								{{ frappe._("Customer Delivery Details") }}
+								<span class="text-error">*</span>
+							</div>
+							<v-text-field
+								class="sleek-field pos-themed-input mb-2"
+								variant="solo"
+								density="compact"
+								color="primary"
+								:label="frappe._('Name')"
+								v-model="credit_customer_name"
+								hide-details
+							></v-text-field>
+							<v-text-field
+								class="sleek-field pos-themed-input mb-2"
+								variant="solo"
+								density="compact"
+								color="primary"
+								:label="frappe._('Phone')"
+								v-model="credit_customer_phone"
+								hide-details
+							></v-text-field>
+							<v-textarea
+								class="sleek-field"
+								variant="solo"
+								density="compact"
+								color="primary"
+								auto-grow
+								rows="2"
+								:label="frappe._('Address')"
+								v-model="credit_customer_address"
+								hide-details
+							></v-textarea>
+						</v-card>
+					</v-col>
+					<v-col
 						cols="6"
 						v-if="invoice_doc && !invoice_doc.is_return && pos_profile.use_customer_credit"
 					>
@@ -954,6 +994,9 @@ export default {
 			paymentVisible: false,
 			_shortcutHandlers: {},
 			tray_deposit_amount_received: 0, // Amount of deposit received for tray deposits
+			credit_customer_name: "", // Credit sale customer name (for delivery)
+			credit_customer_phone: "", // Credit sale customer phone (for delivery)
+			credit_customer_address: "", // Credit sale customer address (for delivery)
 		};
 	},
 	computed: {
@@ -1379,6 +1422,10 @@ export default {
 						payment.amount = this.invoice_doc.rounded_total || this.invoice_doc.grand_total;
 					}
 				});
+				// Clear captured credit customer details
+				this.credit_customer_name = "";
+				this.credit_customer_phone = "";
+				this.credit_customer_address = "";
 			}
 		},
 		// Watch is_credit_return to toggle cashback payments
@@ -1765,6 +1812,39 @@ export default {
 					frappe.utils.play_sound("error");
 					return;
 				}
+				// Enforce customer delivery details for credit sale when enabled
+				if (
+					this.is_credit_sale &&
+					this.pos_profile.custom_input_customer_details_pos
+				) {
+					const name = (this.credit_customer_name || "").trim();
+					const phone = (this.credit_customer_phone || "").trim();
+					const address = (this.credit_customer_address || "").trim();
+					if (!name || !phone || !address) {
+						this.eventBus.emit("show_message", {
+							title: __(
+								"Please fill in Name, Phone and Address for credit sale delivery",
+							),
+							color: "error",
+						});
+						frappe.utils.play_sound("error");
+						return;
+					}
+					const delivery_note = `Name: ${name}\nPhone: ${phone}\nAddress: ${address}`;
+					const existing = (this.invoice_doc.posa_notes || "").trim();
+					// Replace any existing delivery block or append
+					const deliveryBlockRegex = /Name:[\s\S]*?Phone:[\s\S]*?Address:[^\n]*/;
+					if (existing && deliveryBlockRegex.test(existing)) {
+						this.invoice_doc.posa_notes = existing.replace(
+							deliveryBlockRegex,
+							delivery_note,
+						);
+					} else if (existing) {
+						this.invoice_doc.posa_notes = `${existing}\n\n${delivery_note}`;
+					} else {
+						this.invoice_doc.posa_notes = delivery_note;
+					}
+				}
 				// Proceed to submit the invoice
 				// We rely on backend validation in submit_invoice to catch stock issues
 				await this.submit_invoice(print);
@@ -1966,6 +2046,27 @@ export default {
 
 				if (print) {
 					this.load_print_page();
+					// Print a second copy (one for customer, one for rider) when
+					// the invoice is a credit sale / partially paid / unpaid and
+					// the POS Profile has custom_print_two_unpaid_invoices enabled.
+					if (this.pos_profile?.custom_print_two_unpaid_invoices) {
+						const grand_total = this.flt(
+							this.invoice_doc.rounded_total || this.invoice_doc.grand_total,
+						);
+						const paid_amount = this.flt(
+							r.message?.paid_amount ?? this.total_payments,
+						);
+						const outstanding = this.flt(
+							r.message?.outstanding_amount ?? (grand_total - paid_amount),
+						);
+						const is_unpaid_or_partial =
+							this.is_credit_sale || outstanding > 0 || paid_amount < grand_total;
+						if (is_unpaid_or_partial) {
+							setTimeout(() => {
+								this.load_print_page();
+							}, 1500);
+						}
+					}
 				}
 				this.customer_credit_dict = [];
 				this.redeem_customer_credit = false;

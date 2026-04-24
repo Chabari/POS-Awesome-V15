@@ -309,6 +309,11 @@ fixtures = [
                     "POS Profile-custom_enable_pin_login",
                     "POS Profile-posa_allow_multi_currency",
                     "POS Profile-posa_decimal_precision",
+                    "POS Profile-custom_hide_pos_totals",
+                    "POS Profile-custom_disable_shift_closing_unpaid_invoices",
+                    "POS Profile-custom_print_two_unpaid_invoices",
+                    "POS Profile-custom_remove_stock_balance_pos",
+                    "POS Profile-custom_input_customer_details_pos",
                 ),
             ]
         ],

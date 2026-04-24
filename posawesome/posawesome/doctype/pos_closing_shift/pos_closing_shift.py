@@ -65,7 +65,76 @@ class POSClosingShift(Document):
                 _("Selected POS Opening Shift should be open."),
                 title=_("Invalid Opening Entry"),
             )
+        self.validate_unpaid_invoices()
         self.update_payment_reconciliation()
+
+    def validate_unpaid_invoices(self):
+        """Block shift closing when there are unpaid invoices and the
+        `custom_disable_shift_closing_unpaid_invoices` POS Profile flag is on.
+
+        If `posa_allow_delete` is also enabled, draft invoices for this shift
+        are deleted first so they do not block closing.
+        """
+        profile = frappe.db.get_value(
+            "POS Profile",
+            self.pos_profile,
+            [
+                "custom_disable_shift_closing_unpaid_invoices",
+                "posa_allow_delete",
+                "create_pos_invoice_instead_of_sales_invoice",
+            ],
+            as_dict=True,
+        ) or {}
+
+        if not profile.get("custom_disable_shift_closing_unpaid_invoices"):
+            return
+
+        doctype = (
+            "POS Invoice"
+            if profile.get("create_pos_invoice_instead_of_sales_invoice")
+            else "Sales Invoice"
+        )
+
+        if profile.get("posa_allow_delete"):
+            drafts = frappe.get_all(
+                doctype,
+                filters={
+                    "posa_pos_opening_shift": self.pos_opening_shift,
+                    "docstatus": 0,
+                    "posa_is_printed": 0,
+                },
+                pluck="name",
+            )
+            for name in drafts:
+                frappe.delete_doc(doctype, name, force=1)
+
+        unpaid = frappe.get_all(
+            doctype,
+            filters={
+                "posa_pos_opening_shift": self.pos_opening_shift,
+                "docstatus": 1,
+                "is_return": 0,
+                "outstanding_amount": [">", 0],
+            },
+            fields=["name", "customer", "outstanding_amount"],
+        )
+
+        if unpaid:
+            rows = "".join(
+                "<li>{name} &mdash; {customer} ({amount})</li>".format(
+                    name=frappe.bold(inv.name),
+                    customer=frappe.utils.escape_html(inv.customer or ""),
+                    amount=frappe.utils.fmt_money(inv.outstanding_amount),
+                )
+                for inv in unpaid
+            )
+            frappe.throw(
+                _(
+                    "Cannot close shift. The following invoices are unpaid. "
+                    "Please settle them before closing:<br><ul>{0}</ul>"
+                ).format(rows),
+                title=_("Unpaid Invoices"),
+            )
 
     def update_payment_reconciliation(self):
         # update the difference values in Payment Reconciliation child table

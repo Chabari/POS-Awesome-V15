@@ -29,7 +29,7 @@
 
 			<v-card-text class="pa-0 white-background">
 				<v-container class="pa-6">
-					<v-row class="mb-6">
+					<v-row class="mb-6" v-if="!hidePosTotals">
 						<v-col cols="12" class="pa-1">
 							<div class="table-header mb-4">
 								<h4 class="text-h6 text-grey-darken-2 mb-1">
@@ -1239,6 +1239,9 @@ export default {
 	},
 
 	computed: {
+		hidePosTotals() {
+			return !!(this.pos_profile && this.pos_profile.custom_hide_pos_totals);
+		},
 		companyCurrencySymbol() {
 			const currency =
 				this.overviewCompanyCurrency ||
@@ -1541,7 +1544,10 @@ export default {
 		});
 		this.eventBus.on("register_pos_profile", (data) => {
 			this.pos_profile = data.pos_profile;
-			if (!this.pos_profile.hide_expected_amount) {
+			if (
+				!this.pos_profile.hide_expected_amount &&
+				!this.pos_profile.custom_hide_pos_totals
+			) {
 				this.headers = [...this.baseHeaders, ...this.extendedHeaders];
 			} else {
 				this.headers = [...this.baseHeaders];
