@@ -262,6 +262,9 @@ def get_pos_profile_tax_inclusive(pos_profile: str):
 
 @frappe.whitelist()
 def get_database_usage():
+    _cached = frappe.cache().get_value("posaw_db_usage")
+    if _cached:
+        return _cached
     db_size = None
     db_connections = None
     db_slow_queries = None
@@ -335,7 +338,7 @@ def get_database_usage():
         db_table_count = None
         db_total_rows = None
         db_top_tables = []
-    return {
+    result = {
         "db_size": db_size,
         "db_connections": db_connections,
         "db_slow_queries": db_slow_queries,
@@ -345,11 +348,17 @@ def get_database_usage():
         "db_total_rows": db_total_rows,
         "db_top_tables": db_top_tables,
     }
+    frappe.cache().set_value("posaw_db_usage", result, expires_in_sec=60)
+    return result
 
 
 @frappe.whitelist()
 def get_server_usage():
     global _PSUTIL_MISSING_LOGGED
+
+    _cached = frappe.cache().get_value("posaw_server_usage")
+    if _cached:
+        return _cached
 
     cpu_percent = None
     memory_percent = None
@@ -376,7 +385,7 @@ def get_server_usage():
             uptime = time.time() - psutil.boot_time()
         except Exception as e:
             frappe.log_error(f"Server usage error: {e}")
-    return {
+    result = {
         "cpu_percent": cpu_percent,
         "memory_percent": memory_percent,
         "memory_total": memory_total,
@@ -385,6 +394,8 @@ def get_server_usage():
         "load_avg": load_avg,
         "uptime": uptime,
     }
+    frappe.cache().set_value("posaw_server_usage", result, expires_in_sec=30)
+    return result
 
 
 # Cache for language data
