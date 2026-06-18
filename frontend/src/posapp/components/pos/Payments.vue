@@ -547,6 +547,26 @@
 					>
 						<v-switch v-model="is_credit_sale" :label="frappe._('Credit Sale?')"></v-switch>
 					</v-col>
+					<v-col cols="12" v-if="requiresPaymentReferenceInput">
+						<v-row dense>
+							<v-col
+								cols="12"
+								v-for="payment in requiredPaymentReferencePayments"
+								:key="`payment-reference-${payment.name || payment.mode_of_payment}`"
+							>
+								<v-text-field
+									density="compact"
+									variant="solo"
+									color="primary"
+									class="sleek-field pos-themed-input"
+									hide-details
+									:label="__('Payment Reference') + ' - ' + __(payment.mode_of_payment) + ' *'"
+									v-model="payment.reference_no"
+									autocomplete="off"
+								></v-text-field>
+							</v-col>
+						</v-row>
+					</v-col>
 					<v-col cols="6" v-if="invoice_doc && invoice_doc.is_return && pos_profile.use_cashback">
 						<v-switch
 							v-model="is_cashback"
@@ -997,6 +1017,7 @@ export default {
 			credit_customer_name: "", // Credit sale customer name (for delivery)
 			credit_customer_phone: "", // Credit sale customer phone (for delivery)
 			credit_customer_address: "", // Credit sale customer address (for delivery)
+			paymentReferenceEnforcement: {}, // Mode of Payment -> enforce reference flag
 		};
 	},
 	computed: {
@@ -1267,6 +1288,24 @@ export default {
 			}
 			return parsed;
 		},
+		requiredPaymentReferencePayments() {
+			const payments = Array.isArray(this.invoice_doc?.payments) ? this.invoice_doc.payments : [];
+			return payments.filter((payment) => {
+				if (!payment || !payment.mode_of_payment) {
+					return false;
+				}
+
+				const amount = this.flt(payment.amount || 0, this.currency_precision);
+				if (amount <= 0) {
+					return false;
+				}
+
+				return Boolean(this.paymentReferenceEnforcement[payment.mode_of_payment]);
+			});
+		},
+		requiresPaymentReferenceInput() {
+			return this.requiredPaymentReferencePayments.length > 0;
+		},
 	},
 	watch: {
 		// Watch diff_payment to update paid_change
@@ -1489,6 +1528,75 @@ export default {
 		},
 	},
 	methods: {
+		async ensurePaymentReferencePolicy(payment) {
+			if (!payment || !payment.mode_of_payment) {
+				return false;
+			}
+
+			const mode = payment.mode_of_payment;
+			if (Object.prototype.hasOwnProperty.call(this.paymentReferenceEnforcement, mode)) {
+				return Boolean(this.paymentReferenceEnforcement[mode]);
+			}
+
+			let enforced = false;
+			try {
+				const { message } = await frappe.db.get_value(
+					"Mode of Payment",
+					mode,
+					["custom_enforce_payment_reference"],
+				);
+				enforced = Boolean(this.flt(message?.custom_enforce_payment_reference || 0));
+			} catch (error) {
+				enforced = false;
+			}
+
+			this.paymentReferenceEnforcement = {
+				...this.paymentReferenceEnforcement,
+				[mode]: enforced,
+			};
+
+			return enforced;
+		},
+		async refreshPaymentReferencePolicies(payments = []) {
+			const list = Array.isArray(payments) ? payments : [];
+			const uniqueModes = [...new Set(list.map((payment) => payment?.mode_of_payment).filter(Boolean))];
+
+			if (!uniqueModes.length) {
+				return;
+			}
+
+			await Promise.all(uniqueModes.map((mode) => this.ensurePaymentReferencePolicy({ mode_of_payment: mode })));
+		},
+		normalizePaymentReferences() {
+			const payments = Array.isArray(this.invoice_doc?.payments) ? this.invoice_doc.payments : [];
+			payments.forEach((payment) => {
+				if (!payment || !payment.mode_of_payment) {
+					return;
+				}
+
+				const isEnforced = Boolean(this.paymentReferenceEnforcement[payment.mode_of_payment]);
+				const amount = this.flt(payment.amount || 0, this.currency_precision);
+
+				if (!isEnforced || amount <= 0) {
+					payment.reference_no = "";
+					return;
+				}
+
+				if (payment.reference_no === undefined || payment.reference_no === null) {
+					payment.reference_no = "";
+				}
+			});
+		},
+		getMissingRequiredPaymentReferences() {
+			const missing = [];
+			this.requiredPaymentReferencePayments.forEach((payment) => {
+				const value = (payment.reference_no || "").toString().trim();
+				if (!value) {
+					missing.push(payment.mode_of_payment);
+				}
+			});
+			return missing;
+		},
 		getBatchItemsMissingTraySelection() {
 			const items = this.invoiceStore.items || [];
 			return items.filter((item) => {
@@ -1687,6 +1795,19 @@ export default {
 		async submit(event, payment_received = false, print = false) {
 			this.loading = true;
 			try {
+				await this.refreshPaymentReferencePolicies(this.invoice_doc?.payments || []);
+				this.normalizePaymentReferences();
+
+				const missingReferences = this.getMissingRequiredPaymentReferences();
+				if (missingReferences.length) {
+					this.eventBus.emit("show_message", {
+						title: __("Payment reference is required for: {0}", [missingReferences.join(", ")]),
+						color: "error",
+					});
+					frappe.utils.play_sound("error");
+					return;
+				}
+
 				if (!this.validateBatchTraySelections()) {
 					return;
 				}
@@ -1862,6 +1983,9 @@ export default {
 
 		// Submit invoice to backend after all validations
 		async submit_invoice(print) {
+			await this.refreshPaymentReferencePolicies(this.invoice_doc?.payments || []);
+			this.normalizePaymentReferences();
+
 			// For return invoices, ensure payments are negative one last time
 			if (this.invoice_doc.is_return) {
 				this.ensureReturnPaymentsAreNegative();
@@ -2225,6 +2349,7 @@ export default {
 			}
 
 			// Force Vue to update the view
+			this.normalizePaymentReferences();
 			this.$forceUpdate();
 		},
 		// Set remaining amount for a payment method when focused
@@ -2242,6 +2367,7 @@ export default {
 					}
 				}
 			});
+			this.normalizePaymentReferences();
 		},
 		// Clear all payment amounts
 		clear_all_amounts() {
@@ -2887,6 +3013,9 @@ export default {
 		handlePaymentAmountChange(payment, event) {
 			this.last_payment_change_was_cash = this.isCashLikePayment(payment);
 			format.methods.setFormatedCurrency.call(this, payment, "amount", null, false, event);
+			this.ensurePaymentReferencePolicy(payment).finally(() => {
+				this.normalizePaymentReferences();
+			});
 
 			this.$nextTick(() => {
 				this.autoBalancePayments(payment);
@@ -2899,6 +3028,9 @@ export default {
 				payment.base_amount = this.flt(amount * conversion_rate, this.currency_precision);
 			}
 			this.last_payment_change_was_cash = this.isCashLikePayment(payment);
+			this.ensurePaymentReferencePolicy(payment).finally(() => {
+				this.normalizePaymentReferences();
+			});
 			this.$nextTick(() => {
 				this.autoBalancePayments(payment);
 			});
@@ -3081,6 +3213,9 @@ export default {
 			// Listen to various event bus events for POS actions
 			this.eventBus.on("send_invoice_doc_payment", (invoice_doc) => {
 				this.invoice_doc = invoice_doc;
+				this.refreshPaymentReferencePolicies(invoice_doc?.payments || []).finally(() => {
+					this.normalizePaymentReferences();
+				});
 				const default_payment = this.invoice_doc.payments.find((payment) => payment.default === 1);
 				const hasReturnPayments = this.invoice_doc.payments.some(
 					(payment) => Math.abs(this.flt(payment.amount || 0, this.currency_precision)) > 0,
@@ -3183,6 +3318,7 @@ export default {
 				this.is_credit_return = false;
 				this.return_valid_upto_date = null;
 				this.tray_deposit_amount_received = 0;
+				this.paymentReferenceEnforcement = {};
 			});
 			// Scroll to top when payment view is shown
 			this.eventBus.on("show_payment", this.handleShowPayment);

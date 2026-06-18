@@ -348,7 +348,7 @@ def get_database_usage():
         "db_total_rows": db_total_rows,
         "db_top_tables": db_top_tables,
     }
-    frappe.cache().set_value("posaw_db_usage", result, expires_in_sec=60)
+    frappe.cache().set_value("posaw_db_usage", result, expires_in_sec=600)
     return result
 
 
@@ -394,7 +394,7 @@ def get_server_usage():
         "load_avg": load_avg,
         "uptime": uptime,
     }
-    frappe.cache().set_value("posaw_server_usage", result, expires_in_sec=30)
+    frappe.cache().set_value("posaw_server_usage", result, expires_in_sec=600)
     return result
 
 

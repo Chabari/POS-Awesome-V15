@@ -176,6 +176,9 @@ def get_active_pricing_rules(params: dict | None = None, **kwargs):
     """Return active selling pricing rules for the POS context."""
 
     ctx = _parse_params(params, kwargs)
+    if cint(ctx.get("ignore_pricing_rule") or 0):
+        return []
+
     if not ctx.get("company"):
         frappe.throw(_("Company is required"))
     if not ctx.get("price_list"):
@@ -294,6 +297,7 @@ def _build_doc_context(ctx: frappe._dict):
         selling_price_list=ctx.get("price_list"),
         price_list_currency=ctx.get("currency"),
         conversion_rate=flt(ctx.get("conversion_rate") or 1),
+        ignore_pricing_rule=cint(ctx.get("ignore_pricing_rule") or 0),
         items=[],
     )
     return doc
@@ -356,7 +360,7 @@ def _build_pricing_args(line: frappe._dict, ctx: frappe._dict) -> frappe._dict:
         uom=line.get("uom"),
         item_group=line.get("item_group"),
         brand=line.get("brand"),
-        ignore_pricing_rule=0,
+        ignore_pricing_rule=cint(ctx.get("ignore_pricing_rule") or 0),
         child_docname=line.get("posa_row_id") or line.get("name") or line.item_code,
         transaction_type="selling",
     )
@@ -397,9 +401,39 @@ def reconcile_line_prices(cart_payload: dict | str | None = None):
 
     from erpnext.accounts.doctype.pricing_rule.pricing_rule import get_pricing_rule_for_item
 
+    prepared_lines: List[Tuple[frappe._dict, frappe._dict]] = []
+    doc_items_by_row_id: Dict[str, frappe._dict] = {}
+
+    # Seed doc items up-front so mixed-condition pricing rules can evaluate
+    # against the complete cart for every line, matching ERPNext behavior.
     for raw_line in lines:
         line = frappe._dict(raw_line)
         args = _build_pricing_args(line, ctx)
+        row_id = line.get("posa_row_id") or line.get("name") or line.item_code
+        prepared_lines.append((line, args))
+
+        doc_item = frappe._dict(
+            {
+                "doctype": "Sales Invoice Item",
+                "name": row_id,
+                "item_code": args.item_code,
+                "item_group": args.get("item_group"),
+                "brand": args.get("brand"),
+                "qty": args.qty,
+                "stock_qty": args.stock_qty,
+                "pricing_rules": "",
+                "is_free_item": 0,
+                "price_list_rate": flt(args.price_list_rate or 0),
+                "rate": flt(args.rate or 0),
+                "amount": flt(args.rate or 0) * flt(args.qty or 0),
+                "net_amount": flt(args.rate or 0) * flt(args.qty or 0),
+            }
+        )
+        doc.setdefault("items", []).append(doc_item)
+        doc_items_by_row_id[row_id] = doc_item
+
+    for line, args in prepared_lines:
+        row_id = line.get("posa_row_id") or line.get("name") or line.item_code
         details = get_pricing_rule_for_item(args, doc=doc)
 
         applied_rules = []
@@ -413,7 +447,7 @@ def reconcile_line_prices(cart_payload: dict | str | None = None):
 
         updates.append(
             {
-                "row_id": line.get("posa_row_id") or line.get("name") or line.item_code,
+                "row_id": row_id,
                 "rate": rate,
                 "price_list_rate": price_list_rate,
                 "discount_amount": discount_amount,
@@ -424,20 +458,13 @@ def reconcile_line_prices(cart_payload: dict | str | None = None):
 
         _collect_freebies(freebies, details.get("free_item_data"))
 
-        doc.setdefault("items", []).append(
-            frappe._dict(
-                {
-                    "item_code": args.item_code,
-                    "qty": args.qty,
-                    "pricing_rules": ",".join(applied_rules),
-                    "is_free_item": 0,
-                    "rate": rate,
-                    "amount": rate * args.qty,
-                    "net_amount": rate * args.qty,
-                    "price_list_rate": price_list_rate,
-                }
-            )
-        )
+        doc_item = doc_items_by_row_id.get(row_id)
+        if doc_item:
+            doc_item.pricing_rules = ",".join(applied_rules)
+            doc_item.rate = rate
+            doc_item.price_list_rate = price_list_rate
+            doc_item.amount = rate * args.qty
+            doc_item.net_amount = rate * args.qty
 
     # Calculate totals for transaction-level pricing rules
     total = sum(flt(d.get("amount")) for d in doc.get("items"))

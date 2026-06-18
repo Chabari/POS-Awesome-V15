@@ -1,6 +1,6 @@
 import { ref, onUnmounted } from "vue";
 
-export function useServerStats(pollInterval = 10000, windowSize = 60) {
+export function useServerStats(pollInterval = 100000, windowSize = 60) {
 	const cpu = ref(null);
 	const memory = ref(null);
 	const memoryTotal = ref(null);

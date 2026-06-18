@@ -2,7 +2,7 @@ import { ref, onUnmounted } from "vue";
 
 const API_URL = "/api/method/posawesome.posawesome.api.utilities.get_server_usage";
 
-export function useServerCpu(pollInterval = 10000, windowSize = 60) {
+export function useServerCpu(pollInterval = 100000, windowSize = 60) {
 	const cpu = ref(null);
 	const memory = ref(null);
 	const memoryTotal = ref(null);

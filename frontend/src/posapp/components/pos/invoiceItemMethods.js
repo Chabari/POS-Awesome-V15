@@ -105,6 +105,12 @@ export default {
 			company: this.pos_profile?.company || doc.company || null,
 			price_list: priceList || this.pos_profile?.selling_price_list || null,
 			currency: selectedCurrency || this.pos_profile?.currency || null,
+			ignore_pricing_rule:
+				this.pos_profile?.ignore_pricing_rule === true ||
+				this.pos_profile?.ignore_pricing_rule === 1 ||
+				this.pos_profile?.ignore_pricing_rule === "1"
+					? 1
+					: 0,
 			date:
 				this.posting_date ||
 				this.posting_date_display ||
@@ -4623,7 +4629,7 @@ export default {
 
 		if (clamped) {
 			this.calc_item_price(item);
-		} else if (!this._applyingPricingRules) {
+		} else {
 			this.schedulePricingRuleApplication();
 		}
 	},

@@ -1,6 +1,6 @@
 import { ref, onUnmounted } from "vue";
 
-export function useDatabaseStats(pollInterval = 10000, windowSize = 60) {
+export function useDatabaseStats(pollInterval = 100000, windowSize = 60) {
 	const dbStats = ref(null);
 	const history = ref([]);
 	const loading = ref(true);

@@ -421,6 +421,47 @@ def _auto_set_return_batches(invoice_doc):
                 frappe.throw(_("No batches available in {0} for {1}.").format(d.warehouse, d.item_code))
 
 
+def _mode_requires_payment_reference(mode_of_payment):
+    if not mode_of_payment:
+        return False
+
+    return bool(
+        cint(
+            frappe.get_cached_value(
+                "Mode of Payment",
+                mode_of_payment,
+                "custom_enforce_payment_reference",
+            )
+            or 0
+        )
+    )
+
+
+def _sanitize_and_validate_payment_references(invoice_doc):
+    required_missing = []
+
+    for payment in invoice_doc.get("payments", []):
+        amount = flt(payment.get("amount") or 0)
+        mode = payment.get("mode_of_payment")
+        enforce_reference = _mode_requires_payment_reference(mode)
+
+        if enforce_reference and amount > 0:
+            reference_no = cstr(payment.get("reference_no") or "").strip()
+            if not reference_no:
+                required_missing.append(mode)
+            else:
+                payment.reference_no = reference_no
+        else:
+            payment.reference_no = ""
+
+    if required_missing:
+        frappe.throw(
+            _("Payment Reference is required for: {0}").format(
+                ", ".join(sorted(set(required_missing)))
+            )
+        )
+
+
 @frappe.whitelist()
 def validate_cart_items(items, pos_profile=None):
     """Validate cart items for available stock.
@@ -938,6 +979,7 @@ def submit_invoice(invoice, data, submit_in_background=False):
         invoice_doc.update(invoice)
 
     _deduplicate_free_items(invoice_doc)
+    _sanitize_and_validate_payment_references(invoice_doc)
 
     if invoice_doc.redeem_loyalty_points and not invoice_doc.loyalty_program:
         invoice_doc.loyalty_program = frappe.db.get_value("Customer", invoice_doc.customer, "loyalty_program")
