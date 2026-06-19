@@ -435,6 +435,9 @@ export default {
 		handleToggleOffline() {
 			toggleManualOffline();
 			this.manualOffline = isManualOffline();
+			if (this.eventBus) {
+				this.eventBus.emit("manual-offline-changed", this.manualOffline);
+			}
 			if (this.manualOffline) {
 				this.networkOnline = false;
 				this.serverOnline = false;

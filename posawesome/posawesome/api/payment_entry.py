@@ -1072,6 +1072,9 @@ def process_pos_payment(payload):
                 if not amount:
                     continue
                 mode_of_payment = payment_method.get("mode_of_payment")
+                reference_no = (
+                    str(payment_method.get("reference_no") or "").strip() or pos_opening_shift_name
+                )
                 payment_entry = create_payment_entry(
                     company=company,
                     customer=customer,
@@ -1080,7 +1083,7 @@ def process_pos_payment(payload):
                     mode_of_payment=mode_of_payment,
                     exchange_rate=data.get("exchange_rate"),
                     posting_date=today,
-                    reference_no=pos_opening_shift_name,
+                    reference_no=reference_no,
                     reference_date=today,
                     cost_center=data.pos_profile.get("cost_center"),
                     submit=0,

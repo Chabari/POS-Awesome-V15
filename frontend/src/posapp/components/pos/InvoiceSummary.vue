@@ -108,6 +108,7 @@
 							@click="handleSaveAndClear"
 							class="summary-btn"
 							:loading="saveLoading"
+							:disabled="offlineMode || saveLoading"
 						>
 							{{ __("Save & Clear") }}
 						</v-btn>
@@ -121,6 +122,7 @@
 							@click="handleLoadDrafts"
 							class="white-text-btn summary-btn"
 							:loading="loadDraftsLoading"
+							:disabled="offlineMode || loadDraftsLoading"
 						>
 							{{ __("Load Drafts") }}
 						</v-btn>
@@ -211,6 +213,8 @@
 </template>
 
 <script>
+import { isOffline } from "../../../offline/index.js";
+
 export default {
 	props: {
 		pos_profile: Object,
@@ -237,6 +241,7 @@ export default {
 			printLoading: false,
 			applyOffersLoading: false,
 			paymentLoading: false,
+			offlineMode: false,
 			additionalDiscountDisplay: null,
 			additionalDiscountPercentageDisplay: null,
 			isEditingAdditionalDiscount: false,
@@ -283,10 +288,49 @@ export default {
 		},
 	},
 	created() {
+		this.offlineMode = isOffline();
 		this.additionalDiscountDisplay = this.normalizeDiscountDisplay(this.additional_discount);
 		this.additionalDiscountPercentageDisplay = this.normalizeDiscountDisplay(
 			this.additional_discount_percentage,
 		);
+	},
+	mounted() {
+		this._offlineHandlers = {
+			online: () => {
+				this.offlineMode = isOffline();
+			},
+			offline: () => {
+				this.offlineMode = isOffline();
+			},
+			networkOnline: () => {
+				this.offlineMode = isOffline();
+			},
+			serverOnline: () => {
+				this.offlineMode = isOffline();
+			},
+			manualOfflineChanged: (state) => {
+				this.offlineMode = Boolean(state);
+			},
+		};
+
+		window.addEventListener("online", this._offlineHandlers.online);
+		window.addEventListener("offline", this._offlineHandlers.offline);
+		if (this.eventBus) {
+			this.eventBus.on("network-online", this._offlineHandlers.networkOnline);
+			this.eventBus.on("server-online", this._offlineHandlers.serverOnline);
+			this.eventBus.on("manual-offline-changed", this._offlineHandlers.manualOfflineChanged);
+		}
+	},
+	beforeUnmount() {
+		if (this._offlineHandlers) {
+			window.removeEventListener("online", this._offlineHandlers.online);
+			window.removeEventListener("offline", this._offlineHandlers.offline);
+			if (this.eventBus) {
+				this.eventBus.off("network-online", this._offlineHandlers.networkOnline);
+				this.eventBus.off("server-online", this._offlineHandlers.serverOnline);
+				this.eventBus.off("manual-offline-changed", this._offlineHandlers.manualOfflineChanged);
+			}
+		}
 	},
 	methods: {
 		normalizeDiscountDisplay(value) {
@@ -330,6 +374,9 @@ export default {
 		},
 
 		async handleSaveAndClear() {
+			if (this.offlineMode) {
+				return;
+			}
 			this.saveLoading = true;
 			try {
 				await this.$emit("save-and-clear");
@@ -339,6 +386,9 @@ export default {
 		},
 
 		async handleLoadDrafts() {
+			if (this.offlineMode) {
+				return;
+			}
 			this.loadDraftsLoading = true;
 			try {
 				await this.$emit("load-drafts");

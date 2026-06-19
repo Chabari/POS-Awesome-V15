@@ -559,9 +559,13 @@
 									variant="solo"
 									color="primary"
 									class="sleek-field pos-themed-input"
-									hide-details
+									hide-details="auto"
 									:label="__('Payment Reference') + ' - ' + __(payment.mode_of_payment) + ' *'"
-									v-model="payment.reference_no"
+									:model-value="payment.reference_no"
+									@update:model-value="payment.reference_no = $event ? $event.toUpperCase() : $event"
+									@keypress="payment.reference_no?.length >= 15 && $event.preventDefault()"
+									maxlength="15"
+									:rules="[v => !v || v.length >= 5 || 'Enter valid reference']"
 									autocomplete="off"
 								></v-text-field>
 							</v-col>

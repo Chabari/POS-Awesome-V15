@@ -392,6 +392,28 @@
 									</div>
 								</v-col>
 							</v-row>
+							<v-row v-if="requiresPaymentReferenceInput">
+								<v-col
+									cols="12"
+									v-for="payment in requiredPaymentReferencePayments"
+									:key="`payment-reference-${payment.name || payment.mode_of_payment}`"
+								>
+									<v-text-field
+										density="compact"
+										variant="solo"
+										color="primary"
+										class="sleek-field pos-themed-input"
+										hide-details="auto"
+										:label="__('Payment Reference') + ' - ' + __(payment.mode_of_payment) + ' *'"
+										:model-value="payment.reference_no"
+										@update:model-value="payment.reference_no = $event ? $event.toUpperCase() : $event"
+										@keypress="payment.reference_no?.length >= 15 && $event.preventDefault()"
+										maxlength="15"
+										:rules="[v => !v || v.length >= 5 || 'Enter valid reference']"
+										autocomplete="off"
+									></v-text-field>
+								</v-col>
+							</v-row>
 						</div>
 
 						<v-divider v-if="requiresExchangeRate"></v-divider>
@@ -549,6 +571,7 @@ export default {
 			currency_filter: "ALL",
 			exchangeRate: null,
 			companyCurrency: null,
+			paymentReferenceEnforcement: {},
 			invoices_headers: [
 				{
 					title: "",
@@ -1056,9 +1079,11 @@ export default {
 				this.payment_methods.push({
 					mode_of_payment: method.mode_of_payment,
 					amount: 0,
+					reference_no: "",
 					row_id: method.name,
 				});
 			});
+			this.refreshPaymentReferencePolicies(this.payment_methods);
 		},
 
 		getPaymentMethodCurrency(mode_of_payment) {
@@ -1101,6 +1126,75 @@ export default {
 				console.error('Failed to load payment method currencies:', error);
 			}
 		},
+		async ensurePaymentReferencePolicy(payment) {
+			if (!payment || !payment.mode_of_payment) {
+				return false;
+			}
+
+			const mode = payment.mode_of_payment;
+			if (Object.prototype.hasOwnProperty.call(this.paymentReferenceEnforcement, mode)) {
+				return Boolean(this.paymentReferenceEnforcement[mode]);
+			}
+
+			let enforced = false;
+			try {
+				const { message } = await frappe.db.get_value(
+					"Mode of Payment",
+					mode,
+					["custom_enforce_payment_reference"],
+				);
+				enforced = Boolean(flt(message?.custom_enforce_payment_reference || 0));
+			} catch (error) {
+				enforced = false;
+			}
+
+			this.paymentReferenceEnforcement = {
+				...this.paymentReferenceEnforcement,
+				[mode]: enforced,
+			};
+
+			return enforced;
+		},
+		async refreshPaymentReferencePolicies(payments = []) {
+			const list = Array.isArray(payments) ? payments : [];
+			const uniqueModes = [...new Set(list.map((payment) => payment?.mode_of_payment).filter(Boolean))];
+
+			if (!uniqueModes.length) {
+				return;
+			}
+
+			await Promise.all(uniqueModes.map((mode) => this.ensurePaymentReferencePolicy({ mode_of_payment: mode })));
+		},
+		normalizePaymentReferences() {
+			const payments = Array.isArray(this.payment_methods) ? this.payment_methods : [];
+			payments.forEach((payment) => {
+				if (!payment || !payment.mode_of_payment) {
+					return;
+				}
+
+				const isEnforced = Boolean(this.paymentReferenceEnforcement[payment.mode_of_payment]);
+				const amount = flt(payment.amount || 0);
+
+				if (!isEnforced || amount <= 0) {
+					payment.reference_no = "";
+					return;
+				}
+
+				if (payment.reference_no === undefined || payment.reference_no === null) {
+					payment.reference_no = "";
+				}
+			});
+		},
+		getMissingRequiredPaymentReferences() {
+			const missing = [];
+			this.requiredPaymentReferencePayments.forEach((payment) => {
+				const value = (payment.reference_no || "").toString().trim();
+				if (!value) {
+					missing.push(payment.mode_of_payment);
+				}
+			});
+			return missing;
+		},
 		clear_all(with_customer_info = true) {
 			this.customer_name = "";
 			if (with_customer_info) {
@@ -1117,6 +1211,7 @@ export default {
 			this.selected_mpesa_payments = [];
 			this.auto_reconcile_summary = "";
 			this.auto_reconcile_loading = false;
+			this.paymentReferenceEnforcement = {};
 			this.set_payment_methods();
 		},
 
@@ -1179,6 +1274,16 @@ export default {
 				this.payment_methods.forEach((payment) => {
 					payment.amount = flt(payment.amount);
 				});
+
+				await this.refreshPaymentReferencePolicies(this.filtered_payment_methods);
+				this.normalizePaymentReferences();
+
+				const missingReferences = this.getMissingRequiredPaymentReferences();
+				if (missingReferences.length) {
+					frappe.throw(
+						__("Payment reference is required for: {0}", [missingReferences.join(", ")]),
+					);
+				}
 
 				const payload = {
 					customer,
@@ -1562,6 +1667,24 @@ export default {
 
 			console.log("Payment methods total:", total, "from", this.filtered_payment_methods);
 			return total;
+		},
+		requiredPaymentReferencePayments() {
+			const payments = Array.isArray(this.filtered_payment_methods) ? this.filtered_payment_methods : [];
+			return payments.filter((payment) => {
+				if (!payment || !payment.mode_of_payment) {
+					return false;
+				}
+
+				const amount = flt(payment.amount || 0);
+				if (amount <= 0) {
+					return false;
+				}
+
+				return Boolean(this.paymentReferenceEnforcement[payment.mode_of_payment]);
+			});
+		},
+		requiresPaymentReferenceInput() {
+			return this.requiredPaymentReferencePayments.length > 0;
 		},
 		total_of_diff() {
 			// Calculate difference between invoice total and payment total
