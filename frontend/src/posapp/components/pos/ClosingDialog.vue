@@ -769,6 +769,41 @@
 					</v-row>
 					<v-row>
 						<v-col cols="12" class="pa-1">
+							<div class="table-header mb-4" v-if="showFuelClosingReadingsTable">
+								<h4 class="text-h6 text-grey-darken-2 mb-1">
+									{{ __("Nozzle Closing Readings") }}
+								</h4>
+								<p class="text-body-2 text-grey">
+									{{ __("Capture final nozzle readings before payment reconciliation") }}
+								</p>
+							</div>
+
+							<v-data-table
+								v-if="showFuelClosingReadingsTable"
+								:headers="nozzleClosingHeaders"
+								:items="nozzleClosingReadings"
+								item-key="row_key"
+								class="elevation-0 rounded-lg white-table mb-6"
+								:items-per-page="nozzleClosingReadings.length || 50"
+								hide-default-footer
+								density="compact"
+							>
+								<template v-slot:item.opening_reading="{ item }">
+									{{ formatFloat(item.opening_reading || 0, 3) }}
+								</template>
+								<template v-slot:item.closing_reading="{ item }">
+									<v-text-field
+										v-model="item.closing_reading"
+										type="number"
+										density="compact"
+										variant="outlined"
+										color="primary"
+										hide-details
+										class="pos-themed-input"
+									/>
+								</template>
+							</v-data-table>
+
 							<div class="table-header mb-4">
 								<h4 class="text-h6 text-grey-darken-2 mb-1">
 									{{ __("Payment Reconciliation") }}
@@ -867,6 +902,14 @@ export default {
 		overview: null,
 		overviewLoading: false,
 		headers: [],
+		nozzleClosingReadings: [],
+		nozzleClosingHeaders: [
+			{ title: __("Nozzle"), value: "nozzle", align: "start", sortable: false },
+			{ title: __("Fuel Item"), value: "fuel_item", align: "start", sortable: false },
+			{ title: __("Fuel Pump"), value: "fuel_pump", align: "start", sortable: false },
+			{ title: __("Opening Reading"), value: "opening_reading", align: "end", sortable: false },
+			{ title: __("Closing Reading"), value: "closing_reading", align: "end", sortable: false },
+		],
 		baseHeaders: [
 			{
 				title: __("Mode of Payment"),
@@ -958,7 +1001,34 @@ export default {
 				alert(this.__("Invalid closing amount"));
 				return;
 			}
-			this.eventBus.emit("submit_closing_pos", this.dialog_data);
+
+			const invalidNozzles = this.nozzleClosingReadings.some((row) => {
+				if (!this.showFuelClosingReadingsTable) {
+					return false;
+				}
+
+				const openingReading = Number(row.opening_reading || 0);
+				const closingReading = Number(row.closing_reading || 0);
+				return !Number.isFinite(closingReading) || closingReading < openingReading;
+			});
+
+			if (invalidNozzles) {
+				alert(this.__("Closing reading must be valid and not less than opening reading."));
+				return;
+			}
+
+			const payload = {
+				...this.dialog_data,
+				nozzle_closing_readings: this.nozzleClosingReadings.map((row) => ({
+					nozzle: row.nozzle,
+					fuel_item: row.fuel_item,
+					fuel_pump: row.fuel_pump,
+					opening_reading: Number(row.opening_reading || 0),
+					closing_reading: Number(row.closing_reading || 0),
+				})),
+			};
+
+			this.eventBus.emit("submit_closing_pos", payload);
 			this.closingDialog = false;
 		},
 		fetchOverview(openingShift) {
@@ -1239,6 +1309,13 @@ export default {
 	},
 
 	computed: {
+		showFuelClosingReadingsTable() {
+			return (
+				!!(this.pos_profile && this.pos_profile.custom_enable_fuel_customization) &&
+				Array.isArray(this.nozzleClosingReadings) &&
+				this.nozzleClosingReadings.length > 0
+			);
+		},
 		hidePosTotals() {
 			return !!(this.pos_profile && this.pos_profile.custom_hide_pos_totals);
 		},
@@ -1540,6 +1617,23 @@ export default {
 			this.closingDialog = true;
 			this.forceClose = !!data.force_close;
 			this.dialog_data = data;
+			this.nozzleClosingReadings = (data.custom_nozzle_readings || []).map((row, index) => {
+				const openingReading = Number(
+					row.opening_reading ?? row.current_reading ?? row.custom_current_reading ?? row.reading ?? 0,
+				);
+				const closingReading = Number(
+					row.closing_reading ?? row.current_reading ?? row.custom_current_reading ?? row.reading ?? openingReading,
+				);
+
+				return {
+					row_key: `${row.nozzle || row.nozzle_name || "row"}-${index}`,
+					nozzle: row.nozzle || row.nozzle_name || "",
+					fuel_item: row.fuel_item || "",
+					fuel_pump: row.fuel_pump || "",
+					opening_reading: openingReading,
+					closing_reading: closingReading,
+				};
+			});
 			this.fetchOverview(data.pos_opening_shift);
 		});
 		this.eventBus.on("register_pos_profile", (data) => {

@@ -53,6 +53,37 @@
 							</v-col>
 
 							<!-- Payment Methods Section - Compact -->
+							<v-col cols="12" v-if="showFuelReadingsTable">
+								<div class="section-header-compact">
+									<h6 class="section-title-compact">
+										<v-icon class="section-icon">mdi-gas-station</v-icon>
+										{{ __("Opening Nozzle Readings") }}
+									</h6>
+								</div>
+
+								<v-data-table
+									:headers="nozzle_readings_headers"
+									:items="nozzle_readings"
+									item-key="row_key"
+									class="enhanced-table-compact nozzle-readings-table"
+									:items-per-page="nozzle_readings.length || 50"
+									hide-default-footer
+									density="compact"
+								>
+									<template v-slot:item.current_reading="{ item }">
+										<v-text-field
+											v-model="item.current_reading"
+											type="number"
+											density="compact"
+											variant="outlined"
+											color="primary"
+											hide-details
+											class="amount-input"
+										/>
+									</template>
+								</v-data-table>
+							</v-col>
+
 							<v-col cols="12">
 								<div class="section-header-compact">
 									<h6 class="section-title-compact">
@@ -158,6 +189,34 @@ export default {
 			pos_profile: "",
 			payments_method_data: [],
 			payments_methods: [],
+			fuel_customization_data: {},
+			nozzle_readings: [],
+			nozzle_readings_headers: [
+				{
+					title: __("Nozzle Name"),
+					align: "start",
+					sortable: false,
+					value: "nozzle_name",
+				},
+				{
+					title: __("Fuel Item"),
+					align: "start",
+					sortable: false,
+					value: "fuel_item",
+				},
+				{
+					title: __("Fuel Pump"),
+					align: "start",
+					sortable: false,
+					value: "fuel_pump",
+				},
+				{
+					title: __("Current Reading"),
+					value: "current_reading",
+					align: "center",
+					sortable: false,
+				},
+			],
 			payments_methods_headers: [
 				{
 					title: __("Mode of Payment"),
@@ -207,6 +266,30 @@ export default {
 					});
 				}
 			});
+
+			const profileFuelData = this.fuel_customization_data[val] || {};
+			const profileNozzles = Array.isArray(profileFuelData.nozzle_readings)
+				? profileFuelData.nozzle_readings
+				: [];
+
+			this.nozzle_readings = profileNozzles.map((row, index) => ({
+				row_key: `${val}-${index}`,
+				nozzle_name: row.nozzle_name || row.custom_nozzle_name || "",
+				fuel_item: row.fuel_item || row.custom_fuel_item || "",
+				fuel_pump: row.fuel_pump || row.custom_fuel_pump || "",
+				current_reading: row.current_reading || row.custom_current_reading || row.reading || 0,
+			}));
+		},
+	},
+
+	computed: {
+		showFuelReadingsTable() {
+			if (!this.pos_profile) {
+				return false;
+			}
+
+			const profileFuelData = this.fuel_customization_data[this.pos_profile] || {};
+			return !!profileFuelData.enabled;
 		},
 	},
 
@@ -241,6 +324,7 @@ export default {
 						vm.companies = r.message.companies.map((element) => element.name);
 						vm.pos_profiles_data = r.message.pos_profiles_data;
 						vm.payments_method_data = r.message.payments_method;
+						vm.fuel_customization_data = r.message.fuel_customization || {};
 						vm.company = vm.companies[0] || "";
 						try {
 							setOpeningDialogStorage(r.message);
@@ -265,6 +349,7 @@ export default {
 					pos_profile: this.pos_profile,
 					company: this.company,
 					balance_details: this.payments_methods,
+					nozzle_readings: this.nozzle_readings,
 				})
 				.then((r) => {
 					if (r.message) {

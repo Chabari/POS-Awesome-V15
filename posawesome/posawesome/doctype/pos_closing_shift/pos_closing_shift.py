@@ -10,7 +10,7 @@ from erpnext.accounts.doctype.pos_invoice_merge_log.pos_invoice_merge_log import
 )
 from frappe import _, DoesNotExistError
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, flt, nowdate
 
 
 def get_base_value(doc, fieldname, base_fieldname=None, conversion_rate=None):
@@ -36,6 +36,196 @@ def get_base_value(doc, fieldname, base_fieldname=None, conversion_rate=None):
         )
 
     return flt(value) * flt(conversion_rate or 1)
+
+
+def _row_as_dict(row):
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, "as_dict"):
+        return row.as_dict()
+    return {}
+
+
+def _row_nozzle_value(row):
+    row_dict = _row_as_dict(row)
+    return row_dict.get("nozzle") or row_dict.get("nozzle_name") or row_dict.get("custom_nozzle_name") or ""
+
+
+def _row_opening_reading(row):
+    row_dict = _row_as_dict(row)
+    return flt(
+        row_dict.get("opening_reading")
+        or row_dict.get("current_reading")
+        or row_dict.get("custom_current_reading")
+        or row_dict.get("reading")
+        or 0
+    )
+
+
+def _row_closing_reading(row):
+    row_dict = _row_as_dict(row)
+    return flt(
+        row_dict.get("closing_reading")
+        or row_dict.get("current_reading")
+        or row_dict.get("custom_current_reading")
+        or row_dict.get("reading")
+        or 0
+    )
+
+
+def _row_key(row):
+    row_dict = _row_as_dict(row)
+    return (
+        (_row_nozzle_value(row) or "").strip(),
+        (row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "").strip(),
+        (row_dict.get("fuel_pump") or row_dict.get("custom_fuel_pump") or "").strip(),
+    )
+
+
+def _update_opening_nozzle_rows_and_get_dispensed(opening_shift_doc, nozzle_closing_readings):
+    closing_rows_map = {}
+    for row in nozzle_closing_readings or []:
+        row_dict = _row_as_dict(row)
+        closing_rows_map[_row_key(row_dict)] = _row_closing_reading(row_dict)
+
+    dispensed_by_item = defaultdict(float)
+    for row in opening_shift_doc.get("custom_nozzle_readings") or []:
+        row_dict = _row_as_dict(row)
+        row_key = _row_key(row_dict)
+        opening_reading = _row_opening_reading(row_dict)
+        closing_reading = closing_rows_map.get(row_key, _row_closing_reading(row_dict))
+        if closing_reading < opening_reading:
+            closing_reading = opening_reading
+
+        if row_dict.get("name"):
+            frappe.db.set_value(
+                row_dict.get("doctype") or row.doctype,
+                row_dict.get("name"),
+                "closing_reading",
+                closing_reading,
+                update_modified=False,
+            )
+
+        fuel_item = row_dict.get("fuel_item") or row_dict.get("custom_fuel_item")
+        if fuel_item:
+            dispensed_by_item[fuel_item] += flt(closing_reading - opening_reading)
+
+    return dispensed_by_item
+
+
+def _get_shift_sold_by_item(opening_shift_name, pos_profile):
+    sold_by_item = defaultdict(float)
+    use_pos_invoice = frappe.db.get_value(
+        "POS Profile",
+        pos_profile,
+        "create_pos_invoice_instead_of_sales_invoice",
+    )
+    invoice_doctype = "POS Invoice" if use_pos_invoice else "Sales Invoice"
+    invoice_item_doctype = "POS Invoice Item" if use_pos_invoice else "Sales Invoice Item"
+
+    invoice_names = frappe.get_all(
+        invoice_doctype,
+        filters={
+            "docstatus": 1,
+            "posa_pos_opening_shift": opening_shift_name,
+        },
+        pluck="name",
+    )
+
+    if not invoice_names:
+        return sold_by_item
+
+    items = frappe.get_all(
+        invoice_item_doctype,
+        filters={"parent": ["in", invoice_names]},
+        fields=["item_code", "qty"],
+    )
+    for item in items:
+        if item.get("item_code"):
+            sold_by_item[item.get("item_code")] += flt(item.get("qty") or 0)
+
+    return sold_by_item
+
+
+def _update_pos_profile_nozzle_current_readings(pos_profile_doc, nozzle_closing_readings):
+    closing_rows_map = {}
+    for row in nozzle_closing_readings or []:
+        row_dict = _row_as_dict(row)
+        closing_rows_map[_row_key(row_dict)] = _row_closing_reading(row_dict)
+
+    if not closing_rows_map:
+        return
+
+    updated_rows = []
+    for row in pos_profile_doc.get("custom_pump_nozzles") or []:
+        row_dict = _row_as_dict(row)
+        row_key = _row_key(row_dict)
+        closing_reading = closing_rows_map.get(row_key)
+        if closing_reading is None:
+            updated_rows.append(row_dict)
+            continue
+
+        if "current_reading" in row_dict:
+            row_dict["current_reading"] = closing_reading
+        if "custom_current_reading" in row_dict:
+            row_dict["custom_current_reading"] = closing_reading
+        if "closing_reading" in row_dict:
+            row_dict["closing_reading"] = closing_reading
+        updated_rows.append(row_dict)
+
+    pos_profile_doc.set("custom_pump_nozzles", updated_rows)
+    pos_profile_doc.save(ignore_permissions=True)
+
+
+def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, deficit_by_item):
+    if not deficit_by_item:
+        return
+
+    customer = pos_profile_doc.get("customer")
+    if not customer:
+        frappe.throw(_("Customer is required in POS Profile to create unreconciled fuel invoice."))
+
+    warehouse = pos_profile_doc.get("warehouse")
+    invoice = frappe.new_doc("Sales Invoice")
+    invoice.customer = customer
+    invoice.company = closing_shift_doc.company
+    invoice.posting_date = nowdate()
+    invoice.due_date = nowdate()
+    invoice.is_pos = 0
+
+    if pos_profile_doc.get("taxes_and_charges"):
+        invoice.taxes_and_charges = pos_profile_doc.get("taxes_and_charges")
+    if pos_profile_doc.get("selling_price_list"):
+        invoice.selling_price_list = pos_profile_doc.get("selling_price_list")
+
+    if frappe.db.has_column("Sales Invoice", "posa_pos_opening_shift"):
+        invoice.posa_pos_opening_shift = closing_shift_doc.pos_opening_shift
+    # if frappe.db.has_column("Sales Invoice", "pos_closing_entry"):
+    #     invoice.pos_closing_entry = closing_shift_doc.name
+
+    invoice.remarks = _("Unreconciled fuel quantity invoice generated during POS shift closing.")
+
+    for item_code, qty in sorted(deficit_by_item.items()):
+        if flt(qty) <= 0:
+            continue
+
+        item_row = {
+            "item_code": item_code,
+            "qty": flt(qty),
+            "rate": flt(frappe.get_cached_value("Item", item_code, "standard_rate") or 0),
+        }
+        if warehouse:
+            item_row["warehouse"] = warehouse
+        invoice.append("items", item_row)
+
+    if not invoice.get("items"):
+        return
+
+    invoice.flags.ignore_permissions = True
+    invoice.set_missing_values()
+    invoice.calculate_taxes_and_totals()
+    invoice.insert(ignore_permissions=True)
+    invoice.submit()
 
 
 class POSClosingShift(Document):
@@ -1140,6 +1330,7 @@ def get_closing_shift_overview(pos_opening_shift):
 @frappe.whitelist()
 def make_closing_shift_from_opening(opening_shift):
     opening_shift = json.loads(opening_shift)
+    opening_shift_doc = frappe.get_doc("POS Opening Shift", opening_shift.get("name"))
     use_pos_invoice = frappe.db.get_value(
         "POS Profile",
         opening_shift.get("pos_profile"),
@@ -1284,15 +1475,79 @@ def make_closing_shift_from_opening(opening_shift):
     closing_shift.set("taxes", taxes)
     closing_shift.set("pos_payments", pos_payments_table)
 
+    if (
+        cint(frappe.db.get_value("POS Profile", closing_shift.pos_profile, "custom_enable_fuel_customization") or 0)
+        == 1
+        and frappe.get_meta("POS Opening Shift").has_field("custom_nozzle_readings")
+    ):
+        nozzle_rows = []
+        for row in opening_shift_doc.get("custom_nozzle_readings") or []:
+            row_data = row.as_dict() if hasattr(row, "as_dict") else row
+            nozzle_rows.append(
+                {
+                    "nozzle": row_data.get("nozzle") or row_data.get("nozzle_name") or "",
+                    "fuel_item": row_data.get("fuel_item") or "",
+                    "fuel_pump": row_data.get("fuel_pump") or "",
+                    "opening_reading": _row_opening_reading(row_data),
+                    "closing_reading": _row_opening_reading(row_data),
+                }
+            )
+
+        # Use set() so frappe converts row dicts to child documents.
+        closing_shift.set("custom_nozzle_readings", nozzle_rows)
+
     return closing_shift
 
 
 @frappe.whitelist()
 def submit_closing_shift(closing_shift):
     closing_shift = json.loads(closing_shift)
+    nozzle_closing_readings = closing_shift.pop("nozzle_closing_readings", [])
     closing_shift_doc = frappe.get_doc(closing_shift)
     closing_shift_doc.flags.ignore_permissions = True
     closing_shift_doc.save()
+
+    can_apply_fuel_reconciliation = (
+        cint(
+            frappe.db.get_value(
+                "POS Profile",
+                closing_shift_doc.pos_profile,
+                "custom_enable_fuel_customization",
+            )
+            or 0
+        )
+        == 1
+        and frappe.get_meta("POS Opening Shift").has_field("custom_nozzle_readings")
+        and frappe.get_meta("POS Profile").has_field("custom_pump_nozzles")
+    )
+
+    if can_apply_fuel_reconciliation and nozzle_closing_readings:
+        opening_shift_doc = frappe.get_doc("POS Opening Shift", closing_shift_doc.pos_opening_shift)
+        pos_profile_doc = frappe.get_doc("POS Profile", closing_shift_doc.pos_profile)
+
+        dispensed_by_item = _update_opening_nozzle_rows_and_get_dispensed(
+            opening_shift_doc,
+            nozzle_closing_readings,
+        )
+        sold_by_item = _get_shift_sold_by_item(
+            closing_shift_doc.pos_opening_shift,
+            closing_shift_doc.pos_profile,
+        )
+
+        deficit_by_item = {}
+        for item_code, dispensed_qty in dispensed_by_item.items():
+            sold_qty = max(flt(sold_by_item.get(item_code) or 0), 0)
+            deficit_qty = flt(dispensed_qty) - sold_qty
+            if deficit_qty > 0:
+                deficit_by_item[item_code] = flt(deficit_qty)
+
+        _create_unreconciled_fuel_invoice(
+            closing_shift_doc,
+            pos_profile_doc,
+            deficit_by_item,
+        )
+        _update_pos_profile_nozzle_current_readings(pos_profile_doc, nozzle_closing_readings)
+
     closing_shift_doc.submit()
     return closing_shift_doc.name
 
