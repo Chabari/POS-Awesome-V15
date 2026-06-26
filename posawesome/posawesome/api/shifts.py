@@ -51,21 +51,38 @@ def _build_nozzle_payload(rows):
                 or "",
                 "fuel_item": row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "",
                 "fuel_pump": row_dict.get("fuel_pump") or row_dict.get("custom_fuel_pump") or "",
+                "warehouse": row_dict.get("warehouse") or row_dict.get("custom_warehouse") or "",
                 "current_reading": _extract_current_reading(row_dict),
             }
         )
     return payload
 
 
-def _prepare_opening_nozzle_rows(nozzle_readings):
+def _prepare_opening_nozzle_rows(nozzle_readings, profile_nozzles=None):
+    profile_nozzle_map = {}
+    for row in profile_nozzles or []:
+        row_dict = _to_dict(row)
+        key = (
+            (row_dict.get("nozzle") or row_dict.get("nozzle_name") or row_dict.get("custom_nozzle_name") or "").strip(),
+            (row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "").strip(),
+            (row_dict.get("fuel_pump") or row_dict.get("custom_fuel_pump") or "").strip(),
+        )
+        profile_nozzle_map[key] = row_dict.get("warehouse") or row_dict.get("custom_warehouse") or ""
+
     rows = []
     for row in nozzle_readings or []:
         row_dict = _to_dict(row)
+        key = (
+            (row_dict.get("nozzle") or row_dict.get("nozzle_name") or "").strip(),
+            (row_dict.get("fuel_item") or "").strip(),
+            (row_dict.get("fuel_pump") or "").strip(),
+        )
         rows.append(
             {
                 "nozzle": row_dict.get("nozzle") or row_dict.get("nozzle_name") or "",
                 "fuel_item": row_dict.get("fuel_item") or "",
                 "fuel_pump": row_dict.get("fuel_pump") or "",
+                "warehouse": row_dict.get("warehouse") or profile_nozzle_map.get(key) or "",
                 "opening_reading": row_dict.get("opening_reading")
                 or row_dict.get("current_reading")
                 or 0,
@@ -106,6 +123,7 @@ def _prepare_profile_nozzle_rows(existing_rows, opening_rows):
                 "nozzle_name": row_dict.get("nozzle_name") or row_dict.get("custom_nozzle_name") or row_dict.get("nozzle") or "",
                 "fuel_item": row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "",
                 "fuel_pump": row_dict.get("fuel_pump") or row_dict.get("custom_fuel_pump") or "",
+                "warehouse": row_dict.get("warehouse") or row_dict.get("custom_warehouse") or "",
                 "opening_reading": current_value,
                 "current_reading": current_value,
             }
@@ -138,14 +156,16 @@ def get_opening_dialog_data():
 
     if include_fuel_customization and include_nozzle_table_on_profile:
         for profile in pos_profiles_data:
+            
             profile_name = profile.name
             pos_profile_doc = frappe.get_doc("POS Profile", profile_name)
             enabled = cint(pos_profile_doc.get("custom_enable_fuel_customization") or 0) == 1
+            print(pos_profile_doc.get("custom_pump_nozzles"))
             data["fuel_customization"][profile_name] = {
                 "enabled": enabled,
                 "nozzle_readings": _build_nozzle_payload(pos_profile_doc.get("custom_pump_nozzles") or []),
             }
-
+           
     # Derive companies from accessible POS Profiles
     company_names = []
     for profile in pos_profiles_data:
@@ -195,7 +215,14 @@ def create_opening_voucher(pos_profile, company, balance_details, nozzle_reading
 
     can_save_nozzles_in_opening = _has_field("POS Opening Shift", "custom_nozzle_readings")
     if can_save_nozzles_in_opening and parsed_nozzle_readings:
-        new_pos_opening.set("custom_nozzle_readings", _prepare_opening_nozzle_rows(parsed_nozzle_readings))
+        pos_profile_doc = frappe.get_doc("POS Profile", pos_profile)
+        new_pos_opening.set(
+            "custom_nozzle_readings",
+            _prepare_opening_nozzle_rows(
+                parsed_nozzle_readings,
+                pos_profile_doc.get("custom_pump_nozzles") or [],
+            ),
+        )
 
     new_pos_opening.insert(ignore_permissions=True)
 

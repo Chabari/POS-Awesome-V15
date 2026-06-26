@@ -266,19 +266,7 @@ export default {
 					});
 				}
 			});
-
-			const profileFuelData = this.fuel_customization_data[val] || {};
-			const profileNozzles = Array.isArray(profileFuelData.nozzle_readings)
-				? profileFuelData.nozzle_readings
-				: [];
-
-			this.nozzle_readings = profileNozzles.map((row, index) => ({
-				row_key: `${val}-${index}`,
-				nozzle_name: row.nozzle_name || row.custom_nozzle_name || "",
-				fuel_item: row.fuel_item || row.custom_fuel_item || "",
-				fuel_pump: row.fuel_pump || row.custom_fuel_pump || "",
-				current_reading: row.current_reading || row.custom_current_reading || row.reading || 0,
-			}));
+			this.refresh_nozzle_readings();
 		},
 	},
 
@@ -294,6 +282,29 @@ export default {
 	},
 
 	methods: {
+		refresh_nozzle_readings() {
+			const selectedProfile = this.pos_profile;
+			if (!selectedProfile) {
+				this.nozzle_readings = [];
+				return;
+			}
+
+			const profileFuelData = this.fuel_customization_data[selectedProfile] || {};
+			const profileNozzles = Array.isArray(profileFuelData.nozzle_readings)
+				? profileFuelData.nozzle_readings
+				: [];
+
+			this.nozzle_readings = profileNozzles.map((row, index) => ({
+				row_key: `${selectedProfile}-${index}`,
+				nozzle_name: row.nozzle_name || row.custom_nozzle_name || row.nozzle || "",
+				fuel_item: row.fuel_item || row.custom_fuel_item || "",
+				fuel_pump: row.fuel_pump || row.custom_fuel_pump || "",
+				warehouse: row.warehouse || row.custom_warehouse || "",
+				current_reading:
+					row.current_reading || row.custom_current_reading || row.opening_reading || row.reading || 0,
+			}));
+		},
+
 		close_opening_dialog() {
 			this.eventBus.emit("close_opening_dialog");
 		},
@@ -310,7 +321,9 @@ export default {
 					vm.companies = cached.companies.map((c) => c.name);
 					vm.pos_profiles_data = cached.pos_profiles_data || [];
 					vm.payments_method_data = cached.payments_method || [];
+					vm.fuel_customization_data = cached.fuel_customization || {};
 					vm.company = vm.companies[0] || "";
+					vm.refresh_nozzle_readings();
 				} catch (e) {
 					console.error("Failed to parse opening dialog cache", e);
 				}
@@ -326,6 +339,7 @@ export default {
 						vm.payments_method_data = r.message.payments_method;
 						vm.fuel_customization_data = r.message.fuel_customization || {};
 						vm.company = vm.companies[0] || "";
+						vm.refresh_nozzle_readings();
 						try {
 							setOpeningDialogStorage(r.message);
 						} catch (e) {

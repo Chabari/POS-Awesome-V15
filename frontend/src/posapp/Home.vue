@@ -3,6 +3,8 @@
 		<PinLoginScreen
 			ref="pinLogin"
 			:pos-profile="posProfile"
+			@auth-state-change="handlePinAuthStateChange"
+			@lock-state-change="handlePinLockStateChange"
 			@authenticated="handlePinAuthenticated"
 		/>
 		<AppLoadingOverlay :visible="globalLoading" />
@@ -126,6 +128,8 @@ export default {
 			cacheUsage: 0,
 			cacheUsageLoading: false,
 			cacheUsageDetails: { total: 0, indexedDB: 0, localStorage: 0 },
+			pinAuthInProgress: false,
+			pinSessionLocked: false,
 
 			// Loading progress handled via utility
 		};
@@ -147,6 +151,9 @@ export default {
 	watch: {
 		networkOnline(newVal, oldVal) {
 			if (newVal && !oldVal) {
+				if (this._shouldPauseBackgroundCalls()) {
+					return;
+				}
 				this.refreshTaxInclusiveSetting();
 				this.eventBus.emit("network-online");
 				this.handleSyncInvoices();
@@ -154,6 +161,9 @@ export default {
 		},
 		serverOnline(newVal, oldVal) {
 			if (newVal && !oldVal) {
+				if (this._shouldPauseBackgroundCalls()) {
+					return;
+				}
 				this.eventBus.emit("server-online");
 				this.handleSyncInvoices();
 			}
@@ -205,6 +215,18 @@ export default {
 		checkCurrentOrigin,
 		checkExternalConnectivity,
 		checkWebSocketConnectivity,
+		_shouldPauseBackgroundCalls() {
+			return this.pinAuthInProgress || this.pinSessionLocked;
+		},
+
+		handlePinAuthStateChange(payload = {}) {
+			this.pinAuthInProgress = Boolean(payload.inProgress);
+		},
+
+		handlePinLockStateChange(payload = {}) {
+			this.pinSessionLocked = Boolean(payload.locked);
+		},
+
 		setPage(page) {
 			this.page = page;
 		},
@@ -403,6 +425,9 @@ export default {
 		},
 
 		async handleSyncInvoices() {
+			if (this._shouldPauseBackgroundCalls()) {
+				return;
+			}
 			const pending = getPendingOfflineInvoiceCount();
 			if (pending) {
 				this.eventBus.emit("show_message", {
@@ -478,6 +503,9 @@ export default {
 		},
 
 		async refreshTaxInclusiveSetting() {
+			if (this._shouldPauseBackgroundCalls()) {
+				return;
+			}
 			if (!this.posProfile || !this.posProfile.name || !navigator.onLine) {
 				return;
 			}
@@ -510,6 +538,8 @@ export default {
 
 		handlePinAuthenticated(data) {
 			console.log("PIN login authenticated:", data.full_name);
+			this.pinAuthInProgress = false;
+			this.pinSessionLocked = false;
 			// Keep client-side session state in sync after login_as()
 			if (data.user) {
 				frappe.session.user = data.user;

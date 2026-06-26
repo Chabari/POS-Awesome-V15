@@ -794,11 +794,17 @@
 								<template v-slot:item.closing_reading="{ item }">
 									<v-text-field
 										v-model="item.closing_reading"
+										@focus="clearClosingReadingError(item)"
+										@blur="enforceClosingReadingMin(item)"
 										type="number"
+										:min="Number(item.opening_reading || 0)"
+										step="0.001"
 										density="compact"
 										variant="outlined"
 										color="primary"
-										hide-details
+										:error="Boolean(nozzleClosingReadingErrors[item.row_key])"
+										:error-messages="nozzleClosingReadingErrors[item.row_key] ? [nozzleClosingReadingErrors[item.row_key]] : []"
+										hide-details="auto"
 										class="pos-themed-input"
 									/>
 								</template>
@@ -903,10 +909,12 @@ export default {
 		overviewLoading: false,
 		headers: [],
 		nozzleClosingReadings: [],
+		nozzleClosingReadingErrors: {},
 		nozzleClosingHeaders: [
 			{ title: __("Nozzle"), value: "nozzle", align: "start", sortable: false },
 			{ title: __("Fuel Item"), value: "fuel_item", align: "start", sortable: false },
 			{ title: __("Fuel Pump"), value: "fuel_pump", align: "start", sortable: false },
+			{ title: __("Fuel Tank"), value: "warehouse", align: "start", sortable: false },
 			{ title: __("Opening Reading"), value: "opening_reading", align: "end", sortable: false },
 			{ title: __("Closing Reading"), value: "closing_reading", align: "end", sortable: false },
 		],
@@ -984,6 +992,49 @@ export default {
 				this.close_dialog();
 			}
 		},
+		clearClosingReadingError(item) {
+			if (!item || !item.row_key) {
+				return;
+			}
+
+			if (this.nozzleClosingReadingErrors[item.row_key]) {
+				const updatedErrors = { ...this.nozzleClosingReadingErrors };
+				delete updatedErrors[item.row_key];
+				this.nozzleClosingReadingErrors = updatedErrors;
+			}
+		},
+		enforceClosingReadingMin(item) {
+			if (!item) {
+				return;
+			}
+
+			const openingReading = Number(item.opening_reading || 0);
+			const closingReading = Number(item.closing_reading);
+
+			if (!item.row_key) {
+				if (Number.isFinite(closingReading) && closingReading < openingReading) {
+					item.closing_reading = openingReading;
+				}
+				return;
+			}
+
+			if (!Number.isFinite(closingReading)) {
+				const updatedErrors = { ...this.nozzleClosingReadingErrors };
+				updatedErrors[item.row_key] = this.__("Readings should be above opening reading.");
+				this.nozzleClosingReadingErrors = updatedErrors;
+				return;
+			}
+
+			if (closingReading < openingReading) {
+				item.closing_reading = openingReading;
+				const updatedErrors = { ...this.nozzleClosingReadingErrors };
+				updatedErrors[item.row_key] = this.__("Readings should be above opening reading.");
+				this.nozzleClosingReadingErrors = updatedErrors;
+				return;
+			}
+
+			this.clearClosingReadingError(item);
+		},
 		close_dialog() {
 			if (this.forceClose) {
 				alert(this.__("You must close the previous day's shift before continuing."));
@@ -1023,6 +1074,7 @@ export default {
 					nozzle: row.nozzle,
 					fuel_item: row.fuel_item,
 					fuel_pump: row.fuel_pump,
+					warehouse: row.warehouse,
 					opening_reading: Number(row.opening_reading || 0),
 					closing_reading: Number(row.closing_reading || 0),
 				})),
@@ -1630,6 +1682,7 @@ export default {
 					nozzle: row.nozzle || row.nozzle_name || "",
 					fuel_item: row.fuel_item || "",
 					fuel_pump: row.fuel_pump || "",
+					warehouse: row.warehouse || "",
 					opening_reading: openingReading,
 					closing_reading: closingReading,
 				};

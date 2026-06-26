@@ -112,14 +112,14 @@
 <script>
 /* global frappe */
 
-const INACTIVITY_TIMEOUT = 1.5 * 60 * 1000; // 3 minutes
+const INACTIVITY_TIMEOUT = 3 * 60 * 1000; // 3 minutes
 
 export default {
 	name: "PinLoginScreen",
 	props: {
 		posProfile: { type: Object, default: () => ({}) },
 	},
-	emits: ["authenticated"],
+	emits: ["authenticated", "auth-state-change", "lock-state-change"],
 	data() {
 		return {
 			visible: false,
@@ -148,9 +148,11 @@ export default {
 					this.visible = true;
 					this.isLocked = true;
 					this.isAuthenticated = false;
+					this.$emit("lock-state-change", { locked: true });
 					this.fetchCashiers();
 				} else {
 					this.visible = false;
+					this.$emit("lock-state-change", { locked: false });
 				}
 			},
 		},
@@ -179,6 +181,44 @@ export default {
 		}
 	},
 	methods: {
+		_extractErrorMessage(err) {
+			if (!err) return "";
+			if (typeof err.message === "string") return err.message;
+			if (typeof err._server_messages === "string") return err._server_messages;
+			return "";
+		},
+
+		_isInvalidRequestError(err) {
+			const raw = this._extractErrorMessage(err);
+			if (!raw) return false;
+			if (/invalid request/i.test(raw)) return true;
+			try {
+				const parsed = JSON.parse(raw);
+				const values = Array.isArray(parsed) ? parsed : [parsed];
+				return values.some((v) => /invalid request/i.test(String(v)));
+			} catch {
+				return false;
+			}
+		},
+
+		async _callPinLoginWithCsrfRetry(args) {
+			try {
+				return await frappe.call({
+					method: "posawesome.posawesome.api.pin_login.pin_login",
+					args,
+				});
+			} catch (e) {
+				if (!this._isInvalidRequestError(e)) {
+					throw e;
+				}
+				await this._refreshCsrfToken();
+				return await frappe.call({
+					method: "posawesome.posawesome.api.pin_login.pin_login",
+					args,
+				});
+			}
+		},
+
 		async fetchCashiers() {
 			this.cashiersLoading = true;
 			try {
@@ -254,13 +294,13 @@ export default {
 			if (this.isLoggingIn || !this.selectedCashier) return;
 			this.isLoggingIn = true;
 			this.pinError = "";
+			this.$emit("auth-state-change", { inProgress: true });
 			try {
-				const r = await frappe.call({
-					method: "posawesome.posawesome.api.pin_login.pin_login",
-					args: {
-						user: this.selectedCashier.name,
-						pin: this.pin,
-					},
+				// Preflight refresh minimizes stale token usage before session switch.
+				await this._refreshCsrfToken();
+				const r = await this._callPinLoginWithCsrfRetry({
+					user: this.selectedCashier.name,
+					pin: this.pin,
 				});
 				if (r.message && r.message.csrf_token) {
 					frappe.csrf_token = r.message.csrf_token;
@@ -273,6 +313,7 @@ export default {
 				this.isAuthenticated = true;
 				this.isLocked = false;
 				this.visible = false;
+				this.$emit("lock-state-change", { locked: false });
 				this.$emit("authenticated", {
 					user: this.selectedCashier.name,
 					full_name: r.message?.full_name || this.selectedCashier.full_name,
@@ -299,6 +340,7 @@ export default {
 				this.pin = "";
 			} finally {
 				this.isLoggingIn = false;
+				this.$emit("auth-state-change", { inProgress: false });
 			}
 		},
 
@@ -309,6 +351,7 @@ export default {
 			this.pin = "";
 			this.pinError = "";
 			this.selectedCashier = null;
+			this.$emit("lock-state-change", { locked: true });
 			this.fetchCashiers();
 		},
 
