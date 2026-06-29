@@ -154,6 +154,81 @@ def _apply_item_name_overrides(invoice_doc, overrides=None):
             item.name_overridden = 0
 
 
+def _row_as_dict(row):
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, "as_dict"):
+        return row.as_dict()
+    return {}
+
+
+def _get_fuel_item_warehouse_map(pos_profile):
+    if not pos_profile:
+        return {}
+
+    profile_meta = frappe.get_meta("POS Profile")
+    if not profile_meta.has_field("custom_pump_nozzles"):
+        return {}
+
+    try:
+        pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+    except frappe.DoesNotExistError:
+        return {}
+
+    has_enable_flag = profile_meta.has_field("custom_enable_fuel_customization")
+    is_enabled = cint(pos_profile_doc.get("custom_enable_fuel_customization") or 0) == 1 if has_enable_flag else False
+    nozzle_rows = pos_profile_doc.get("custom_pump_nozzles") or []
+
+    if not is_enabled and not nozzle_rows:
+        return {}
+
+    item_warehouse_map = {}
+    ambiguous_items = set()
+
+    for row in nozzle_rows:
+        row_dict = _row_as_dict(row)
+        item_code = (row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "").strip()
+        warehouse = (row_dict.get("warehouse") or row_dict.get("custom_warehouse") or "").strip()
+        if not item_code or not warehouse:
+            continue
+
+        existing = item_warehouse_map.get(item_code)
+        if existing and existing != warehouse:
+            ambiguous_items.add(item_code)
+            continue
+
+        item_warehouse_map[item_code] = warehouse
+
+    if ambiguous_items:
+        frappe.logger().warning(
+            "POS Profile %s has multiple nozzle warehouses for fuel item(s): %s. "
+            "Using first configured warehouse per item.",
+            pos_profile,
+            ", ".join(sorted(ambiguous_items)),
+        )
+
+    return item_warehouse_map
+
+
+def _apply_fuel_item_warehouses(invoice_doc, pos_profile=None):
+    profile_name = invoice_doc.get("pos_profile") or pos_profile
+    item_warehouse_map = _get_fuel_item_warehouse_map(profile_name)
+    if not item_warehouse_map:
+        return
+
+    for item in invoice_doc.get("items") or []:
+        item_code = item.get("item_code")
+        if not item_code:
+            continue
+
+        if flt(item.get("qty") or 0) <= 0:
+            continue
+
+        mapped_warehouse = item_warehouse_map.get(item_code)
+        if mapped_warehouse:
+            item.warehouse = mapped_warehouse
+
+
 def _get_available_stock(item):
     """Return available stock qty for an item row."""
     warehouse = item.get("warehouse")
@@ -649,6 +724,7 @@ def update_invoice(data):
 
     # Set missing values first
     invoice_doc.set_missing_values()
+    _apply_fuel_item_warehouses(invoice_doc, pos_profile=pos_profile)
     # Restore batch_no after set_missing_values
     for d in invoice_doc.items:
         if d.idx in batch_snapshot and not d.get("batch_no"):
@@ -977,6 +1053,8 @@ def submit_invoice(invoice, data, submit_in_background=False):
     else:
         invoice_doc = frappe.get_doc(doctype, invoice_name)
         invoice_doc.update(invoice)
+
+    _apply_fuel_item_warehouses(invoice_doc, pos_profile=pos_profile)
 
     _deduplicate_free_items(invoice_doc)
     _sanitize_and_validate_payment_references(invoice_doc)

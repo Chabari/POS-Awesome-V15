@@ -795,6 +795,7 @@
 									<v-text-field
 										v-model="item.closing_reading"
 										@focus="clearClosingReadingError(item)"
+										@input="recomputeFuelExpected"
 										@blur="enforceClosingReadingMin(item)"
 										type="number"
 										:min="Number(item.opening_reading || 0)"
@@ -804,6 +805,8 @@
 										color="primary"
 										:error="Boolean(nozzleClosingReadingErrors[item.row_key])"
 										:error-messages="nozzleClosingReadingErrors[item.row_key] ? [nozzleClosingReadingErrors[item.row_key]] : []"
+										:hint="closingReadingHint(item)"
+										:persistent-hint="Boolean(closingReadingHint(item))"
 										hide-details="auto"
 										class="pos-themed-input"
 									/>
@@ -829,7 +832,12 @@
 								density="compact"
 							>
 								<template v-slot:item.closing_amount="props">
+									<span v-if="props.item.is_credit_sales">
+										{{ companyCurrencySymbol }}
+										{{ formatCurrency(props.item.expected_amount) }}
+									</span>
 									<v-text-field
+										v-else
 										v-model="props.item.closing_amount"
 										:rules="[closingAmountRule]"
 										:label="frappe._('Edit')"
@@ -908,6 +916,8 @@ export default {
 		overview: null,
 		overviewLoading: false,
 		headers: [],
+		cashModeOfPayment: "",
+		fuelCreditTotal: 0,
 		nozzleClosingReadings: [],
 		nozzleClosingReadingErrors: {},
 		nozzleClosingHeaders: [
@@ -1003,6 +1013,74 @@ export default {
 				this.nozzleClosingReadingErrors = updatedErrors;
 			}
 		},
+		setClosingReadingError(item, message) {
+			if (!item || !item.row_key) {
+				return;
+			}
+
+			this.nozzleClosingReadingErrors = {
+				...this.nozzleClosingReadingErrors,
+				[item.row_key]: message,
+			};
+		},
+		sharedTankReadingError(item) {
+			return this.__(
+				"This tank had sales across {0} nozzles. Enter actual nozzle closing readings before submitting.",
+				[item?.shared_tank_nozzle_count || 0],
+			);
+		},
+		closingReadingHint(item) {
+			if (!item?.require_manual_closing || Number(item.expected_sold_qty || 0) <= 0) {
+				return "";
+			}
+
+			return this.__(
+				"Shared tank sales since opening: {0} across {1} nozzles. Enter actual nozzle meter reading.",
+				[
+					this.formatFloat(item.expected_sold_qty || 0, 3),
+					item.shared_tank_nozzle_count || 0,
+				],
+			);
+		},
+		validateSharedTankClosingReadings() {
+			const groupedRows = new Map();
+			let hasInvalidGroup = false;
+
+			for (const row of this.nozzleClosingReadings) {
+				if (!row?.require_manual_closing || Number(row.expected_sold_qty || 0) <= 0) {
+					continue;
+				}
+
+				const key = `${row.fuel_item || ""}::${row.warehouse || ""}`;
+				if (!groupedRows.has(key)) {
+					groupedRows.set(key, []);
+				}
+				groupedRows.get(key).push(row);
+			}
+
+			for (const rows of groupedRows.values()) {
+				const allUntouched = rows.every((row) => {
+					const openingReading = Number(row.opening_reading || 0);
+					const closingReading = Number(row.closing_reading || 0);
+					return !Number.isFinite(closingReading) || closingReading <= openingReading;
+				});
+
+				const errorMessage = this.sharedTankReadingError(rows[0]);
+				if (allUntouched) {
+					hasInvalidGroup = true;
+					rows.forEach((row) => this.setClosingReadingError(row, errorMessage));
+					continue;
+				}
+
+				rows.forEach((row) => {
+					if (this.nozzleClosingReadingErrors[row.row_key] === errorMessage) {
+						this.clearClosingReadingError(row);
+					}
+				});
+			}
+
+			return !hasInvalidGroup;
+		},
 		enforceClosingReadingMin(item) {
 			if (!item) {
 				return;
@@ -1019,21 +1097,61 @@ export default {
 			}
 
 			if (!Number.isFinite(closingReading)) {
-				const updatedErrors = { ...this.nozzleClosingReadingErrors };
-				updatedErrors[item.row_key] = this.__("Readings should be above opening reading.");
-				this.nozzleClosingReadingErrors = updatedErrors;
+				this.setClosingReadingError(item, this.__("Readings should be above opening reading."));
 				return;
 			}
 
 			if (closingReading < openingReading) {
 				item.closing_reading = openingReading;
-				const updatedErrors = { ...this.nozzleClosingReadingErrors };
-				updatedErrors[item.row_key] = this.__("Readings should be above opening reading.");
-				this.nozzleClosingReadingErrors = updatedErrors;
+				this.setClosingReadingError(item, this.__("Readings should be above opening reading."));
 				return;
 			}
 
 			this.clearClosingReadingError(item);
+			this.recomputeFuelExpected();
+		},
+		recomputeFuelExpected() {
+			if (!this.showFuelClosingReadingsTable) {
+				return;
+			}
+			// Total fuel dispensed this shift valued at selling price, regardless
+			// of how/whether it was invoiced. Credit sales are then removed so the
+			// default (cash) mode carries everything expected to be collected.
+			let totalFuel = 0;
+			for (const row of this.nozzleClosingReadings) {
+				const sold = Number(row.closing_reading || 0) - Number(row.opening_reading || 0);
+				if (sold > 0 && Number(row.rate || 0) > 0) {
+					totalFuel += sold * Number(row.rate);
+				}
+			}
+			const credit = Number(this.fuelCreditTotal || 0);
+			const rows = this.dialog_data.payment_reconciliation || [];
+
+			const cashRow = rows.find((r) => r.mode_of_payment === this.cashModeOfPayment);
+			if (cashRow) {
+				console.log("Recomputing cash expected amount:", totalFuel, credit);
+				if(totalFuel > 0){
+					cashRow.expected_amount = totalFuel - credit;
+				}
+			}
+
+			const creditRow = rows.find((r) => r.is_credit_sales);
+			if (credit > 0) {
+				if (creditRow) {
+					creditRow.expected_amount = credit;
+					creditRow.closing_amount = credit;
+				} else {
+					rows.push({
+						mode_of_payment: this.__("Credit Sales"),
+						is_credit_sales: true,
+						opening_amount: 0,
+						expected_amount: credit,
+						closing_amount: credit,
+					});
+				}
+			} else if (creditRow) {
+				rows.splice(rows.indexOf(creditRow), 1);
+			}
 		},
 		close_dialog() {
 			if (this.forceClose) {
@@ -1068,8 +1186,20 @@ export default {
 				return;
 			}
 
+			if (!this.validateSharedTankClosingReadings()) {
+				alert(
+					this.__(
+						"Shared-tank nozzle groups with sales require actual nozzle closing readings before submitting.",
+					),
+				);
+				return;
+			}
+
 			const payload = {
 				...this.dialog_data,
+				payment_reconciliation: (this.dialog_data.payment_reconciliation || []).filter(
+					(row) => !row.is_credit_sales,
+				),
 				nozzle_closing_readings: this.nozzleClosingReadings.map((row) => ({
 					nozzle: row.nozzle,
 					fuel_item: row.fuel_item,
@@ -1669,7 +1799,12 @@ export default {
 			this.closingDialog = true;
 			this.forceClose = !!data.force_close;
 			this.dialog_data = data;
+				this.nozzleClosingReadingErrors = {};
+			const nozzleRowMeta = Array.isArray(data.custom_nozzle_reading_meta)
+				? data.custom_nozzle_reading_meta
+				: [];
 			this.nozzleClosingReadings = (data.custom_nozzle_readings || []).map((row, index) => {
+				const rowMeta = nozzleRowMeta[index] || {};
 				const openingReading = Number(
 					row.opening_reading ?? row.current_reading ?? row.custom_current_reading ?? row.reading ?? 0,
 				);
@@ -1685,8 +1820,15 @@ export default {
 					warehouse: row.warehouse || "",
 					opening_reading: openingReading,
 					closing_reading: closingReading,
+					rate: Number(rowMeta.rate || 0),
+					expected_sold_qty: Number(rowMeta.expected_sold_qty || 0),
+					shared_tank_nozzle_count: Number(rowMeta.shared_tank_nozzle_count || 0),
+					require_manual_closing: Boolean(rowMeta.require_manual_closing),
 				};
 			});
+			this.cashModeOfPayment = data.custom_fuel_cash_mode_of_payment || "";
+			this.fuelCreditTotal = Number(data.custom_fuel_credit_total || 0);
+			this.recomputeFuelExpected();
 			this.fetchOverview(data.pos_opening_shift);
 		});
 		this.eventBus.on("register_pos_profile", (data) => {

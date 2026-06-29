@@ -82,6 +82,66 @@ def _row_key(row):
     )
 
 
+def _row_item_warehouse_key(row):
+    row_dict = _row_as_dict(row)
+    return (
+        (row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "").strip(),
+        (row_dict.get("warehouse") or row_dict.get("custom_warehouse") or "").strip(),
+    )
+
+
+def _validate_shared_tank_closing_readings(opening_shift_doc, nozzle_closing_readings, sold_by_item_warehouse):
+    closing_rows_map = {}
+    for row in nozzle_closing_readings or []:
+        row_dict = _row_as_dict(row)
+        closing_rows_map[_row_key(row_dict)] = _row_closing_reading(row_dict)
+
+    nozzle_groups = defaultdict(list)
+    for row in opening_shift_doc.get("custom_nozzle_readings") or []:
+        row_dict = _row_as_dict(row)
+        nozzle_groups[_row_item_warehouse_key(row_dict)].append(
+            {
+                "row_key": _row_key(row_dict),
+                "nozzle": _row_nozzle_value(row_dict),
+                "opening_reading": _row_opening_reading(row_dict),
+            }
+        )
+
+    invalid_groups = []
+    for item_warehouse_key, group_rows in nozzle_groups.items():
+        if len(group_rows) <= 1:
+            continue
+
+        sold_qty = flt(sold_by_item_warehouse.get(item_warehouse_key) or 0)
+        if sold_qty <= 0:
+            continue
+
+        if any(
+            flt(closing_rows_map.get(row.get("row_key"), row.get("opening_reading")))
+            > flt(row.get("opening_reading"))
+            for row in group_rows
+        ):
+            continue
+
+        item_code, warehouse = item_warehouse_key
+        invalid_groups.append(
+            _("{0} in {1} ({2} nozzles, tank sales {3})").format(
+                frappe.bold(item_code or _("Unknown Item")),
+                frappe.bold(warehouse or _("No Warehouse")),
+                len(group_rows),
+                sold_qty,
+            )
+        )
+
+    if invalid_groups:
+        frappe.throw(
+            _(
+                "Shared-tank nozzle readings require actual nozzle meter entry before closing. "
+                "The following tank groups still match opening readings:<br><ul>{0}</ul>"
+            ).format("".join(f"<li>{group}</li>" for group in invalid_groups))
+        )
+
+
 def _update_opening_nozzle_rows_and_get_dispensed(opening_shift_doc, nozzle_closing_readings):
     closing_rows_map = {}
     for row in nozzle_closing_readings or []:
@@ -211,9 +271,32 @@ def _update_pos_profile_nozzle_current_readings(pos_profile_doc, nozzle_closing_
     pos_profile_doc.save(ignore_permissions=True)
 
 
+def _get_fuel_item_rate(item_code, price_list=None):
+    """Resolve the selling rate for a fuel item.
+
+    Prefers the active selling Item Price (POS Profile price list), falling
+    back to the item's standard_rate when no price is configured.
+    """
+
+    if price_list and item_code:
+        rate = frappe.db.get_value(
+            "Item Price",
+            {
+                "item_code": item_code,
+                "price_list": price_list,
+                "selling": 1,
+            },
+            "price_list_rate",
+        )
+        if flt(rate) > 0:
+            return flt(rate)
+
+    return flt(frappe.get_cached_value("Item", item_code, "standard_rate") or 0)
+
+
 def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, deficit_by_item_warehouse):
     if not deficit_by_item_warehouse:
-        return
+        return None
 
     customer = pos_profile_doc.get("customer")
     if not customer:
@@ -224,8 +307,9 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
     invoice.company = closing_shift_doc.company
     invoice.posting_date = nowdate()
     invoice.due_date = nowdate()
-    invoice.is_pos = 0
+    invoice.is_pos = 1
     invoice.update_stock = 1
+    invoice.pos_profile = pos_profile_doc.name
 
     if pos_profile_doc.get("taxes_and_charges"):
         invoice.taxes_and_charges = pos_profile_doc.get("taxes_and_charges")
@@ -239,6 +323,7 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
 
     invoice.remarks = _("Unreconciled fuel quantity invoice generated during POS shift closing.")
 
+    price_list = pos_profile_doc.get("selling_price_list")
     for (item_code, warehouse), qty in sorted(deficit_by_item_warehouse.items()):
         if flt(qty) <= 0:
             continue
@@ -246,20 +331,95 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
         item_row = {
             "item_code": item_code,
             "qty": flt(qty),
-            "rate": flt(frappe.get_cached_value("Item", item_code, "standard_rate") or 0),
+            "rate": _get_fuel_item_rate(item_code, price_list),
         }
         if warehouse:
             item_row["warehouse"] = warehouse
         invoice.append("items", item_row)
 
     if not invoice.get("items"):
-        return
+        return None
 
     invoice.flags.ignore_permissions = True
     invoice.set_missing_values()
     invoice.calculate_taxes_and_totals()
+
+    cash_mode = pos_profile_doc.get("posa_cash_mode_of_payment") or "Cash"
+    invoice.set("payments", [])
+    invoice.append("payments", {"mode_of_payment": cash_mode, "amount": flt(invoice.grand_total)})
+    invoice.calculate_taxes_and_totals()
+
     invoice.insert(ignore_permissions=True)
     invoice.submit()
+    return invoice
+
+
+def _attach_fuel_invoice_to_closing(closing_shift_doc, invoice):
+    """Add a generated fuel invoice to Linked Invoices and refresh shift totals."""
+    if not invoice:
+        return
+
+    closing_shift_doc.append(
+        "pos_transactions",
+        {
+            "sales_invoice": invoice.name,
+            "posting_date": invoice.posting_date,
+            "grand_total": flt(invoice.base_grand_total or invoice.grand_total),
+            "transaction_currency": invoice.currency,
+            "transaction_amount": flt(invoice.grand_total),
+            "customer": invoice.customer,
+        },
+    )
+    closing_shift_doc.grand_total = flt(closing_shift_doc.grand_total) + flt(
+        invoice.base_grand_total or invoice.grand_total
+    )
+    closing_shift_doc.net_total = flt(closing_shift_doc.net_total) + flt(
+        invoice.base_net_total or invoice.net_total
+    )
+    closing_shift_doc.total_quantity = flt(closing_shift_doc.total_quantity) + flt(invoice.total_qty)
+
+
+def _get_shift_credit_total(opening_shift_name, pos_profile):
+    """Total outstanding (credit) sales for the shift, in company currency."""
+    use_pos_invoice = frappe.db.get_value(
+        "POS Profile", pos_profile, "create_pos_invoice_instead_of_sales_invoice"
+    )
+    doctype = "POS Invoice" if use_pos_invoice else "Sales Invoice"
+    rows = frappe.get_all(
+        doctype,
+        filters={
+            "docstatus": 1,
+            "posa_pos_opening_shift": opening_shift_name,
+            "is_return": 0,
+            "outstanding_amount": [">", 0],
+        },
+        fields=["outstanding_amount", "conversion_rate"],
+    )
+    return sum(flt(r.outstanding_amount) * flt(r.conversion_rate or 1) for r in rows)
+
+
+def _apply_fuel_payment_reconciliation(closing_shift_doc, pos_profile_doc, total_fuel_amount, credit_total=0):
+    """Set the cash mode expected amount to total fuel sales minus credit.
+
+    Credit sales are intentionally not pushed into payment_reconciliation: in
+    ERPNext credit invoices carry no mode of payment, so they are shown only as
+    a generic informational row in the closing dialog, not reconciled here. The
+    default (cash) mode therefore carries every non-credit fuel sale.
+    """
+    cash_mode = pos_profile_doc.get("posa_cash_mode_of_payment") or "Cash"
+    expected = flt(total_fuel_amount) - flt(credit_total)
+
+    cash_row = next(
+        (r for r in closing_shift_doc.payment_reconciliation if r.mode_of_payment == cash_mode),
+        None,
+    )
+    if cash_row:
+        cash_row.expected_amount = expected
+    else:
+        closing_shift_doc.append(
+            "payment_reconciliation",
+            {"mode_of_payment": cash_mode, "opening_amount": 0, "expected_amount": expected},
+        )
 
 
 class POSClosingShift(Document):
@@ -1514,24 +1674,55 @@ def make_closing_shift_from_opening(opening_shift):
         == 1
         and frappe.get_meta("POS Opening Shift").has_field("custom_nozzle_readings")
     ):
+        sold_by_item_warehouse = _get_shift_sold_by_item(opening_shift_doc.name, closing_shift.pos_profile)
+        nozzle_count_by_item_warehouse = defaultdict(int)
+        for row in opening_shift_doc.get("custom_nozzle_readings") or []:
+            nozzle_count_by_item_warehouse[_row_item_warehouse_key(row)] += 1
+
+        fuel_price_list = frappe.db.get_value("POS Profile", closing_shift.pos_profile, "selling_price_list")
         nozzle_rows = []
+        nozzle_row_meta = []
         for row in opening_shift_doc.get("custom_nozzle_readings") or []:
             row_data = row.as_dict() if hasattr(row, "as_dict") else row
+            opening_reading = _row_opening_reading(row_data)
+            fuel_item, warehouse = _row_item_warehouse_key(row_data)
+            sold_qty = flt(sold_by_item_warehouse.get((fuel_item, warehouse)) or 0)
+            nozzle_count = nozzle_count_by_item_warehouse.get((fuel_item, warehouse), 0)
+            require_manual_closing = nozzle_count > 1 and sold_qty > 0
             nozzle_rows.append(
                 {
                     "nozzle": row_data.get("nozzle") or row_data.get("nozzle_name") or "",
-                    "fuel_item": row_data.get("fuel_item") or "",
+                    "fuel_item": fuel_item,
                     "fuel_pump": row_data.get("fuel_pump") or "",
-                    "warehouse": row_data.get("warehouse") or "",
-                    "opening_reading": _row_opening_reading(row_data),
-                    "closing_reading": _row_opening_reading(row_data),
+                    "warehouse": warehouse,
+                    "opening_reading": opening_reading,
+                    "closing_reading": flt(opening_reading + sold_qty)
+                    if nozzle_count <= 1
+                    else opening_reading,
+                }
+            )
+            nozzle_row_meta.append(
+                {
+                    "expected_sold_qty": sold_qty,
+                    "shared_tank_nozzle_count": nozzle_count,
+                    "require_manual_closing": require_manual_closing,
+                    "rate": _get_fuel_item_rate(fuel_item, fuel_price_list),
                 }
             )
 
         # Use set() so frappe converts row dicts to child documents.
         closing_shift.set("custom_nozzle_readings", nozzle_rows)
 
-    return closing_shift
+    response = closing_shift.as_dict()
+    response["custom_nozzle_reading_meta"] = nozzle_row_meta if 'nozzle_row_meta' in locals() else []
+    response["custom_fuel_cash_mode_of_payment"] = (
+        frappe.db.get_value("POS Profile", closing_shift.pos_profile, "posa_cash_mode_of_payment") or "Cash"
+    )
+    response["custom_fuel_credit_total"] = flt(
+        _get_shift_credit_total(closing_shift.pos_opening_shift, closing_shift.pos_profile)
+    )
+
+    return response
 
 
 @frappe.whitelist()
@@ -1541,9 +1732,6 @@ def submit_closing_shift(closing_shift):
     closing_shift_doc = frappe.get_doc(closing_shift)
     closing_shift_doc.flags.ignore_permissions = True
     closing_shift_doc.save()
-
-    if nozzle_closing_readings and frappe.get_meta("POS Closing Shift").has_field("custom_nozzle_readings"):
-        _update_shift_nozzle_rows(closing_shift_doc, nozzle_closing_readings)
 
     can_apply_fuel_reconciliation = (
         cint(
@@ -1559,32 +1747,60 @@ def submit_closing_shift(closing_shift):
         and frappe.get_meta("POS Profile").has_field("custom_pump_nozzles")
     )
 
+    opening_shift_doc = None
+    pos_profile_doc = None
+    sold_by_item_warehouse = {}
+
     if can_apply_fuel_reconciliation and nozzle_closing_readings:
         opening_shift_doc = frappe.get_doc("POS Opening Shift", closing_shift_doc.pos_opening_shift)
         pos_profile_doc = frappe.get_doc("POS Profile", closing_shift_doc.pos_profile)
-
-        dispensed_by_item_warehouse = _update_opening_nozzle_rows_and_get_dispensed(
-            opening_shift_doc,
-            nozzle_closing_readings,
-        )
         sold_by_item_warehouse = _get_shift_sold_by_item(
             closing_shift_doc.pos_opening_shift,
             closing_shift_doc.pos_profile,
         )
+        _validate_shared_tank_closing_readings(
+            opening_shift_doc,
+            nozzle_closing_readings,
+            sold_by_item_warehouse,
+        )
 
+    if can_apply_fuel_reconciliation and nozzle_closing_readings:
+        dispensed_by_item_warehouse = _update_opening_nozzle_rows_and_get_dispensed(
+            opening_shift_doc,
+            nozzle_closing_readings,
+        )
+
+    if nozzle_closing_readings and frappe.get_meta("POS Closing Shift").has_field("custom_nozzle_readings"):
+        _update_shift_nozzle_rows(closing_shift_doc, nozzle_closing_readings)
+
+    if can_apply_fuel_reconciliation and nozzle_closing_readings:
         deficit_by_item_warehouse = {}
+        total_fuel_amount = 0
+        price_list = pos_profile_doc.get("selling_price_list")
         for (item_code, warehouse), dispensed_qty in dispensed_by_item_warehouse.items():
+            total_fuel_amount += flt(dispensed_qty) * _get_fuel_item_rate(item_code, price_list)
             sold_qty = max(flt(sold_by_item_warehouse.get((item_code, warehouse)) or 0), 0)
             deficit_qty = flt(dispensed_qty) - sold_qty
             if deficit_qty > 0:
                 deficit_by_item_warehouse[(item_code, warehouse)] = flt(deficit_qty)
 
-        _create_unreconciled_fuel_invoice(
+        fuel_invoice = _create_unreconciled_fuel_invoice(
             closing_shift_doc,
             pos_profile_doc,
             deficit_by_item_warehouse,
         )
+        _attach_fuel_invoice_to_closing(closing_shift_doc, fuel_invoice)
+        credit_total = _get_shift_credit_total(
+            closing_shift_doc.pos_opening_shift, closing_shift_doc.pos_profile
+        )
+        _apply_fuel_payment_reconciliation(
+            closing_shift_doc,
+            pos_profile_doc,
+            total_fuel_amount,
+            credit_total,
+        )
         _update_pos_profile_nozzle_current_readings(pos_profile_doc, nozzle_closing_readings)
+        closing_shift_doc.save(ignore_permissions=True)
 
     closing_shift_doc.submit()
     return closing_shift_doc.name
