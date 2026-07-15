@@ -212,6 +212,21 @@ def _get_fuel_item_warehouse_map(pos_profile):
 
 def _apply_fuel_item_warehouses(invoice_doc, pos_profile=None):
     profile_name = invoice_doc.get("pos_profile") or pos_profile
+    
+    profile_meta = frappe.get_meta("POS Profile")
+    
+    try:
+        pos_profile_doc = frappe.get_doc("POS Profile", profile_name)
+            
+        has_enable_flag = profile_meta.has_field("custom_enable_fuel_customization")
+        is_enabled = cint(pos_profile_doc.get("custom_enable_fuel_customization") or 0) == 1 if has_enable_flag else False
+
+        if is_enabled:
+            invoice_doc.update_stock = 0
+    
+    except frappe.DoesNotExistError:
+        print(f"POS Profile {profile_name} does not exist. Skipping fuel item warehouse mapping.")
+    
     item_warehouse_map = _get_fuel_item_warehouse_map(profile_name)
     if not item_warehouse_map:
         return
