@@ -342,6 +342,7 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
 
     invoice.flags.ignore_permissions = True
     invoice.set_missing_values()
+    invoice.update_stock = 0
     invoice.calculate_taxes_and_totals()
 
     cash_mode = pos_profile_doc.get("posa_cash_mode_of_payment") or "Cash"
