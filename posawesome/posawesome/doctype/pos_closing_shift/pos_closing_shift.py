@@ -308,7 +308,7 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
     invoice.posting_date = nowdate()
     invoice.due_date = nowdate()
     invoice.is_pos = 1
-    invoice.update_stock = 1
+    invoice.update_stock = 0
     invoice.pos_profile = pos_profile_doc.name
 
     if pos_profile_doc.get("taxes_and_charges"):
