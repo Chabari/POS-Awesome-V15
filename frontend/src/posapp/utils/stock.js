@@ -17,6 +17,14 @@ export function parseBooleanSetting(value) {
 	return Boolean(value);
 }
 
+// When a POS Profile has fuel customizations enabled, sales invoices are saved
+// with update_stock = 0 (handled server-side in _apply_fuel_item_warehouses), so
+// stock is never decremented from the POS warehouse. Skip client-side stock
+// availability checks for these profiles to avoid blocking legitimate sales.
+export function isFuelStockCheckDisabled(posProfile) {
+	return parseBooleanSetting(posProfile?.custom_enable_fuel_customization);
+}
+
 export function formatStockShortageError(itemName, availableQty, requestedQty) {
 	const label = itemName || __("this item");
 	const available = availableQty ?? 0;

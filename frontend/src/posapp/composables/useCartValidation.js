@@ -9,7 +9,7 @@
 
 import { ref } from "vue";
 
-import { parseBooleanSetting, formatStockShortageError } from "../utils/stock.js";
+import { parseBooleanSetting, formatStockShortageError, isFuelStockCheckDisabled } from "../utils/stock.js";
 export function useCartValidation() {
 	const isValidating = ref(false);
 	const validationError = ref(null);
@@ -52,6 +52,12 @@ export function useCartValidation() {
 					});
 				}
 				return false;
+			}
+
+			// Fuel-enabled profiles do not update stock (update_stock = 0), so skip
+			// all stock availability checks that would otherwise block the sale.
+			if (isFuelStockCheckDisabled(posProfile)) {
+				return true;
 			}
 
 			// Step 3: Zero stock validation (if enabled)

@@ -1,7 +1,7 @@
 /* global flt, __, get_currency_symbol */
 import { perfMarkStart, perfMarkEnd } from "../../utils/perf.js";
 
-import { parseBooleanSetting } from "../../utils/stock.js";
+import { parseBooleanSetting, isFuelStockCheckDisabled } from "../../utils/stock.js";
 
 export default {
 	// Calculate total quantity of all items
@@ -138,6 +138,9 @@ export default {
 	},
 	blockSaleBeyondAvailableQty() {
 		if (["Order", "Quotation"].includes(this.invoiceType)) {
+			return false;
+		}
+		if (isFuelStockCheckDisabled(this.pos_profile)) {
 			return false;
 		}
 		return parseBooleanSetting(this.pos_profile?.posa_block_sale_beyond_available_qty);

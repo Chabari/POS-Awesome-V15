@@ -670,7 +670,7 @@ import { useFlyAnimation } from "../../composables/useFlyAnimation.js";
 import { withPerf, perfMarkStart, perfMarkEnd, scheduleFrame } from "../../utils/perf.js";
 import { useCartValidation } from "../../composables/useCartValidation.js";
 import { useItemsIntegration } from "../../composables/useItemsIntegration.js";
-import { parseBooleanSetting, formatStockShortageError } from "../../utils/stock.js";
+import { parseBooleanSetting, formatStockShortageError, isFuelStockCheckDisabled } from "../../utils/stock.js";
 import placeholderImage from "./placeholder-image.png";
 import Skeleton from "../ui/Skeleton.vue";
 import { useCustomersStore } from "../../stores/customersStore.js";
@@ -4159,6 +4159,9 @@ export default {
 			}
 		},
 		isNegativeStockEnabled(item = null) {
+			if (isFuelStockCheckDisabled(this.pos_profile)) {
+				return true;
+			}
 			const allowNegativeSetting = parseBooleanSetting(this.stock_settings?.allow_negative_stock);
 			const allowNegativeItem = item ? parseBooleanSetting(item.allow_negative_stock) : false;
 			return allowNegativeSetting || allowNegativeItem;
@@ -4593,6 +4596,9 @@ export default {
 			return 500;
 		},
 		blockSaleBeyondAvailableQty() {
+			if (isFuelStockCheckDisabled(this.pos_profile)) {
+				return false;
+			}
 			return parseBooleanSetting(this.pos_profile?.posa_block_sale_beyond_available_qty);
 		},
 		headers() {

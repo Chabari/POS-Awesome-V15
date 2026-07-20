@@ -604,7 +604,7 @@
 import _ from "lodash";
 import { logComponentRender } from "../../utils/perf.js";
 import { useInvoiceStore } from "../../stores/invoiceStore.js";
-import { parseBooleanSetting } from "../../utils/stock.js";
+import { parseBooleanSetting, isFuelStockCheckDisabled } from "../../utils/stock.js";
 import CartItemRow from "./CartItemRow.vue";
 import BatchTrayPicker from "./BatchTrayPicker.vue";
 export default {
@@ -761,6 +761,7 @@ export default {
 
 		blockSaleBeyondAvailableQty() {
 			if (["Order", "Quotation"].includes(this.invoiceType)) return false;
+			if (isFuelStockCheckDisabled(this.pos_profile)) return false;
 			return parseBooleanSetting(this.pos_profile?.posa_block_sale_beyond_available_qty);
 		},
 
