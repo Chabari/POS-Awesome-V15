@@ -2094,6 +2094,12 @@ export default {
 		doc.posa_authorization_code = sourceDoc.posa_authorization_code ?? null;
 		doc.posa_return_valid_upto = sourceDoc.posa_return_valid_upto ?? null;
 		doc.posting_date = this.formatDateForBackend(this.posting_date_display);
+		// Without this, ERPNext's validate_posting_time() (TransactionBase) silently
+		// overwrites posting_date back to today whenever set_posting_time is falsy,
+		// which is why a manually selected posting date kept resetting on save/pay.
+		if (this.pos_profile?.posa_allow_change_posting_date) {
+			doc.set_posting_time = 1;
+		}
 
 		// Add flags to ensure proper rate handling
 		doc.ignore_pricing_rule = 0;
