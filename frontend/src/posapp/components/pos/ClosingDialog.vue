@@ -769,6 +769,40 @@
 					</v-row>
 					<v-row>
 						<v-col cols="12" class="pa-1">
+							<div v-if="showCashDrawSummary" class="cash-draw-closing-section mb-6">
+								<div class="table-header mb-3">
+									<h4 class="text-h6 text-grey-darken-2 mb-1">
+										{{ __("Cash Draws") }}
+									</h4>
+									<p class="text-body-2 text-grey">
+										{{ __("Total deducted from expected shift collections") }}:
+										<strong>{{ companyCurrencySymbol }} {{ formatCurrency(cashDrawGrandTotal) }}</strong>
+									</p>
+								</div>
+								<div class="overview-table-wrapper">
+									<table class="overview-table cash-draw-closing-table">
+										<thead>
+											<tr>
+												<th>{{ __("Time") }}</th>
+												<th>{{ __("Mode of Payment") }}</th>
+												<th>{{ __("Narration") }}</th>
+												<th class="text-end">{{ __("Amount") }}</th>
+											</tr>
+										</thead>
+										<tbody>
+											<tr v-for="draw in dialogCashDraws" :key="draw.name">
+												<td>{{ formatCashDrawTime(draw.posting_time) }}</td>
+												<td>{{ draw.mode_of_payment }}</td>
+												<td>{{ draw.narration }}</td>
+												<td class="text-end overview-amount">
+													{{ companyCurrencySymbol }} {{ formatCurrency(draw.amount) }}
+												</td>
+											</tr>
+										</tbody>
+									</table>
+								</div>
+							</div>
+
 							<div class="table-header mb-4" v-if="showFuelClosingReadingsTable">
 								<h4 class="text-h6 text-grey-darken-2 mb-1">
 									{{ __("Nozzle Closing Readings") }}
@@ -850,6 +884,7 @@
 										class="pos-themed-input"
 										hide-details
 										:prefix="companyCurrencySymbol"
+										@input="recomputeFuelExpected"
 									></v-text-field>
 								</template>
 								<template v-slot:item.difference="{ item }">
@@ -859,6 +894,10 @@
 								<template v-slot:item.opening_amount="{ item }">
 									{{ companyCurrencySymbol }}
 									{{ formatCurrency(item.opening_amount) }}</template
+								>
+								<template v-slot:item.cash_drawn="{ item }">
+									{{ companyCurrencySymbol }}
+									{{ formatCurrency(item.cash_drawn || 0) }}</template
 								>
 								<template v-slot:item.expected_amount="{ item }">
 									{{ companyCurrencySymbol }}
@@ -948,6 +987,12 @@ export default {
 				sortable: true,
 			},
 		],
+		cashDrawHeader: {
+			title: __("Cash Drawn"),
+			value: "cash_drawn",
+			align: "end",
+			sortable: false,
+		},
 		extendedHeaders: [
 			{
 				title: __("Expected Amount (In Company Currency)"),
@@ -997,6 +1042,23 @@ export default {
 	watch: {},
 
 	methods: {
+		updateHeaders() {
+			const headers = [...this.baseHeaders];
+			if (this.cashDrawsEnabled) {
+				headers.splice(2, 0, this.cashDrawHeader);
+			}
+			if (
+				this.pos_profile &&
+				!this.pos_profile.hide_expected_amount &&
+				!this.pos_profile.custom_hide_pos_totals
+			) {
+				headers.push(...this.extendedHeaders);
+			}
+			this.headers = headers;
+		},
+		formatCashDrawTime(value) {
+			return value ? String(value).slice(0, 5) : "";
+		},
 		handleKeydown(event) {
 			if (event.key === "Escape" && this.closingDialog) {
 				this.close_dialog();
@@ -1115,8 +1177,8 @@ export default {
 				return;
 			}
 			// Total fuel dispensed this shift valued at selling price, regardless
-			// of how/whether it was invoiced. Credit sales are then removed so the
-			// default (cash) mode carries everything expected to be collected.
+			// of how/whether it was invoiced. This is the full amount that must be
+			// reconciled across all tenders (cash + other modes) plus credit.
 			let totalFuel = 0;
 			for (const row of this.nozzleClosingReadings) {
 				const sold = Number(row.closing_reading || 0) - Number(row.opening_reading || 0);
@@ -1128,11 +1190,67 @@ export default {
 			const rows = this.dialog_data.payment_reconciliation || [];
 
 			const cashRow = rows.find((r) => r.mode_of_payment === this.cashModeOfPayment);
-			if (cashRow) {
-				console.log("Recomputing cash expected amount:", totalFuel, credit);
-				if(totalFuel > 0){
-					cashRow.expected_amount = totalFuel - credit;
+
+			// Round to currency precision (2 dp) so floating-point noise never
+			// leaks a fake variance into the reconciliation.
+			const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+			// Reconcile every OTHER (non-cash) mode of payment - e.g. Mpesa.
+			//
+			// The meter readings are the single source of truth for the money
+			// owed; the payment modes are purely reconciliation lines. For each
+			// non-cash mode we:
+			//   1. Capture its immutable shift sales ONCE - the amount the POS
+			//      invoices already collected through that mode (server-provided
+			//      expected_amount). We stash it in `shift_sales` because we are
+			//      about to overwrite expected_amount for display, so it can never
+			//      be read back afterwards.
+			//   2. Seed the closing amount from that shift-sales figure on the
+			//      first pass so an untouched Mpesa is still subtracted from cash.
+			//   3. Keep expected_amount equal to whatever is currently entered so
+			//      the mode always reconciles to a zero difference (no ratcheting,
+			//      no negative variance). Whatever it carries is removed from cash.
+			let otherModesTotal = 0;
+			for (const row of rows) {
+				if (row.is_credit_sales || row === cashRow) {
+					continue;
 				}
+
+				// The first time we ever process this row is our one chance to
+				// read the untouched server figures. Use it to stash the immutable
+				// shift sales AND to seed the closing amount - the child doctype
+				// ships a default closing_amount of 0, so we cannot rely on
+				// undefined/null to detect "untouched".
+				const firstTime = row.shift_sales === undefined || row.shift_sales === null;
+				if (firstTime) {
+					row.shift_sales = Number(row.expected_amount) || 0;
+				}
+				const shiftSales = Number(row.shift_sales) || 0;
+
+				let closing;
+				if (firstTime) {
+					// Seed with the shift sales so an untouched Mpesa is still
+					// subtracted from cash (overrides the server default of 0).
+					row.closing_amount = shiftSales;
+					closing = shiftSales;
+				} else {
+					closing = Number(row.closing_amount) || 0;
+				}
+
+				closing = round2(closing);
+				row.expected_amount = closing;
+				otherModesTotal += closing;
+			}
+
+			if (cashRow && totalFuel > 0) {
+				// Cash stores the final balance: the meter-reading total minus
+				// credit, cash draws and every other entered tender. It is filled
+				// automatically so it always reconciles to a zero difference.
+				const cashExpected = round2(
+					totalFuel - credit - Number(cashRow.cash_drawn || 0) - otherModesTotal,
+				);
+				cashRow.expected_amount = cashExpected;
+				cashRow.closing_amount = cashExpected;
 			}
 
 			const creditRow = rows.find((r) => r.is_credit_sales);
@@ -1491,6 +1609,21 @@ export default {
 	},
 
 	computed: {
+		cashDrawsEnabled() {
+			return Boolean(
+				this.dialog_data?.cash_draws_enabled ||
+					Number(this.pos_profile?.posa_enable_cash_draw) === 1,
+			);
+		},
+		dialogCashDraws() {
+			return Array.isArray(this.dialog_data?.cash_draws) ? this.dialog_data.cash_draws : [];
+		},
+		showCashDrawSummary() {
+			return this.cashDrawsEnabled && this.dialogCashDraws.length > 0;
+		},
+		cashDrawGrandTotal() {
+			return this.dialogCashDraws.reduce((total, row) => total + Number(row.amount || 0), 0);
+		},
 		showFuelClosingReadingsTable() {
 			return (
 				!!(this.pos_profile && this.pos_profile.custom_enable_fuel_customization) &&
@@ -1799,7 +1932,8 @@ export default {
 			this.closingDialog = true;
 			this.forceClose = !!data.force_close;
 			this.dialog_data = data;
-				this.nozzleClosingReadingErrors = {};
+			this.nozzleClosingReadingErrors = {};
+			this.updateHeaders();
 			const nozzleRowMeta = Array.isArray(data.custom_nozzle_reading_meta)
 				? data.custom_nozzle_reading_meta
 				: [];
@@ -1833,14 +1967,7 @@ export default {
 		});
 		this.eventBus.on("register_pos_profile", (data) => {
 			this.pos_profile = data.pos_profile;
-			if (
-				!this.pos_profile.hide_expected_amount &&
-				!this.pos_profile.custom_hide_pos_totals
-			) {
-				this.headers = [...this.baseHeaders, ...this.extendedHeaders];
-			} else {
-				this.headers = [...this.baseHeaders];
-			}
+			this.updateHeaders();
 		});
 	},
 	mounted() {
@@ -2103,6 +2230,16 @@ export default {
 .overview-empty {
 	padding: 12px 4px;
 	color: var(--pos-text-secondary);
+}
+
+.cash-draw-closing-table th:first-child,
+.cash-draw-closing-table td:first-child {
+	width: 90px;
+}
+
+.cash-draw-closing-table th:last-child,
+.cash-draw-closing-table td:last-child {
+	width: 150px;
 }
 
 .overview-wrapper .v-progress-circular {

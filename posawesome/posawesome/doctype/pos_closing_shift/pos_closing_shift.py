@@ -12,6 +12,11 @@ from frappe import _, DoesNotExistError
 from frappe.model.document import Document
 from frappe.utils import cint, flt, nowdate
 
+from posawesome.posawesome.doctype.pos_cash_draw.pos_cash_draw import (
+    get_cash_draw_totals,
+    get_unposted_cash_draws,
+)
+
 
 def get_base_value(doc, fieldname, base_fieldname=None, conversion_rate=None):
     """Return the value for a field in company currency."""
@@ -415,11 +420,157 @@ def _apply_fuel_payment_reconciliation(closing_shift_doc, pos_profile_doc, total
         None,
     )
     if cash_row:
-        cash_row.expected_amount = expected
+        cash_row.expected_amount = expected - flt(cash_row.get("cash_drawn"))
     else:
         closing_shift_doc.append(
             "payment_reconciliation",
-            {"mode_of_payment": cash_mode, "opening_amount": 0, "expected_amount": expected},
+            {
+                "mode_of_payment": cash_mode,
+                "opening_amount": 0,
+                "cash_drawn": 0,
+                "expected_amount": expected,
+            },
+        )
+
+
+def _apply_cash_draw_reconciliation(
+    closing_shift_doc,
+    cash_draws,
+    expected_includes_existing_draw=False,
+    validate_available=False,
+):
+    totals = get_cash_draw_totals(cash_draws)
+    rows_by_mode = {
+        row.mode_of_payment: row
+        for row in closing_shift_doc.get("payment_reconciliation") or []
+        if row.get("mode_of_payment")
+    }
+
+    for mode_of_payment, amount in totals.items():
+        row = rows_by_mode.get(mode_of_payment)
+        if not row:
+            row = closing_shift_doc.append(
+                "payment_reconciliation",
+                {
+                    "mode_of_payment": mode_of_payment,
+                    "opening_amount": 0,
+                    "closing_amount": 0,
+                    "expected_amount": 0,
+                },
+            )
+            rows_by_mode[mode_of_payment] = row
+
+        expected_before_draw = flt(row.expected_amount)
+        if expected_includes_existing_draw:
+            expected_before_draw += flt(row.get("cash_drawn"))
+
+        row.cash_drawn = flt(amount)
+        row.expected_amount = expected_before_draw - flt(amount)
+        if validate_available and row.expected_amount < 0:
+            frappe.throw(
+                _("Cash drawn through {0} exceeds the amount available in that payment mode by {1}.").format(
+                    frappe.bold(mode_of_payment),
+                    frappe.bold(abs(row.expected_amount)),
+                )
+            )
+
+    for mode_of_payment, row in rows_by_mode.items():
+        if mode_of_payment in totals:
+            continue
+        if expected_includes_existing_draw:
+            row.expected_amount = flt(row.expected_amount) + flt(row.get("cash_drawn"))
+        row.cash_drawn = 0
+
+    closing_shift_doc.total_cash_drawn = sum(flt(amount) for amount in totals.values())
+    return totals
+
+
+def _create_cash_draw_journal_entry(closing_shift_doc):
+    cash_draws = get_unposted_cash_draws(closing_shift_doc.pos_opening_shift)
+    if not cash_draws:
+        return None
+    if closing_shift_doc.get("cash_draw_journal_entry"):
+        return frappe.get_doc("Journal Entry", closing_shift_doc.cash_draw_journal_entry)
+
+    debit_totals = defaultdict(float)
+    credit_totals = defaultdict(float)
+    for row in cash_draws:
+        debit_totals[row.expense_account] += flt(row.amount)
+        credit_totals[row.payment_account] += flt(row.amount)
+
+    pos_profile_doc = frappe.get_cached_doc("POS Profile", closing_shift_doc.pos_profile)
+    cost_center = pos_profile_doc.get("cost_center") or frappe.get_cached_value(
+        "Company", closing_shift_doc.company, "cost_center"
+    )
+    journal_entry = frappe.new_doc("Journal Entry")
+    journal_entry.voucher_type = "Journal Entry"
+    journal_entry.company = closing_shift_doc.company
+    journal_entry.posting_date = closing_shift_doc.posting_date or nowdate()
+    journal_entry.user_remark = _("POS cash draws for closing shift {0}").format(closing_shift_doc.name)
+
+    for account, amount in sorted(debit_totals.items()):
+        journal_entry.append(
+            "accounts",
+            {
+                "account": account,
+                "debit_in_account_currency": flt(amount),
+                "cost_center": cost_center,
+            },
+        )
+    for account, amount in sorted(credit_totals.items()):
+        journal_entry.append(
+            "accounts",
+            {
+                "account": account,
+                "credit_in_account_currency": flt(amount),
+            },
+        )
+
+    journal_entry.flags.ignore_permissions = True
+    journal_entry.insert()
+    journal_entry.submit()
+
+    frappe.db.set_value(
+        "POS Closing Shift",
+        closing_shift_doc.name,
+        "cash_draw_journal_entry",
+        journal_entry.name,
+        update_modified=False,
+    )
+    closing_shift_doc.cash_draw_journal_entry = journal_entry.name
+    for row in cash_draws:
+        frappe.db.set_value(
+            "POS Cash Draw",
+            row.name,
+            {
+                "pos_closing_shift": closing_shift_doc.name,
+                "journal_entry": journal_entry.name,
+            },
+            update_modified=False,
+        )
+
+    return journal_entry
+
+
+def _cancel_cash_draw_journal_entry(closing_shift_doc):
+    journal_entry_name = closing_shift_doc.get("cash_draw_journal_entry")
+    if journal_entry_name and frappe.db.exists("Journal Entry", journal_entry_name):
+        journal_entry = frappe.get_doc("Journal Entry", journal_entry_name)
+        if journal_entry.docstatus == 1:
+            journal_entry.flags.ignore_links = True
+            journal_entry.cancel()
+
+    cash_draw_names = frappe.get_all(
+        "POS Cash Draw",
+        filters={"pos_closing_shift": closing_shift_doc.name, "docstatus": 1},
+        pluck="name",
+    )
+    for cash_draw_name in cash_draw_names:
+        frappe.db.set_value(
+            "POS Cash Draw",
+            cash_draw_name,
+            {"pos_closing_shift": None, "journal_entry": None},
+            update_modified=False,
         )
 
 
@@ -569,7 +720,10 @@ class POSClosingShift(Document):
                 for invoices in invoices_by_currency.values():
                     consolidate_pos_invoices(pos_invoices=invoices)
 
+        _create_cash_draw_journal_entry(self)
+
     def on_cancel(self):
+        _cancel_cash_draw_journal_entry(self)
         if frappe.db.exists("POS Opening Shift", self.pos_opening_shift):
             opening_entry = frappe.get_doc("POS Opening Shift", self.pos_opening_shift)
             if opening_entry.pos_closing_shift == self.name:
@@ -1670,6 +1824,9 @@ def make_closing_shift_from_opening(opening_shift):
     closing_shift.set("taxes", taxes)
     closing_shift.set("pos_payments", pos_payments_table)
 
+    cash_draws = get_unposted_cash_draws(closing_shift.pos_opening_shift)
+    _apply_cash_draw_reconciliation(closing_shift, cash_draws)
+
     if (
         cint(frappe.db.get_value("POS Profile", closing_shift.pos_profile, "custom_enable_fuel_customization") or 0)
         == 1
@@ -1722,6 +1879,12 @@ def make_closing_shift_from_opening(opening_shift):
     response["custom_fuel_credit_total"] = flt(
         _get_shift_credit_total(closing_shift.pos_opening_shift, closing_shift.pos_profile)
     )
+    response["cash_draws_enabled"] = bool(
+        cint(frappe.db.get_value("POS Profile", closing_shift.pos_profile, "posa_enable_cash_draw") or 0)
+        or cash_draws
+    )
+    response["cash_draws"] = cash_draws
+    response["cash_draw_names"] = [row.name for row in cash_draws]
 
     return response
 
@@ -1730,7 +1893,23 @@ def make_closing_shift_from_opening(opening_shift):
 def submit_closing_shift(closing_shift):
     closing_shift = json.loads(closing_shift)
     nozzle_closing_readings = closing_shift.pop("nozzle_closing_readings", [])
+    submitted_cash_draw_names = sorted(closing_shift.pop("cash_draw_names", []) or [])
     closing_shift_doc = frappe.get_doc(closing_shift)
+    frappe.db.sql(
+        "select name from `tabPOS Opening Shift` where name = %s for update",
+        closing_shift_doc.pos_opening_shift,
+    )
+    cash_draws = get_unposted_cash_draws(closing_shift_doc.pos_opening_shift)
+    current_cash_draw_names = sorted(row.name for row in cash_draws)
+    if submitted_cash_draw_names != current_cash_draw_names:
+        frappe.throw(_("Cash draws changed while the closing dialog was open. Reopen it and review the totals."))
+
+    _apply_cash_draw_reconciliation(
+        closing_shift_doc,
+        cash_draws,
+        expected_includes_existing_draw=True,
+        validate_available=True,
+    )
     closing_shift_doc.flags.ignore_permissions = True
     closing_shift_doc.save()
 

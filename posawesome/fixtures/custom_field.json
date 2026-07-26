@@ -1,5 +1,17 @@
 [
  {
+  "default": "0",
+  "description": "Allow cash expenses to be recorded against an open POS shift.",
+  "doctype": "Custom Field",
+  "dt": "POS Profile",
+  "fieldname": "posa_enable_cash_draw",
+  "fieldtype": "Check",
+  "insert_after": "posa_cash_mode_of_payment",
+  "label": "Enable Cash Draw",
+  "module": "POSAwesome",
+  "name": "POS Profile-posa_enable_cash_draw"
+ },
+ {
   "allow_in_quick_entry": 0,
   "allow_on_submit": 0,
   "bold": 0,

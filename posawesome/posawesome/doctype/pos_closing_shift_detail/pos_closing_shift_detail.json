@@ -7,6 +7,7 @@
  "field_order": [
   "mode_of_payment",
   "opening_amount",
+  "cash_drawn",
   "closing_amount",
   "expected_amount",
   "difference"
@@ -28,6 +29,15 @@
    "options": "company:company_currency",
    "read_only": 1,
    "reqd": 1
+  },
+  {
+    "default": "0",
+    "fieldname": "cash_drawn",
+    "fieldtype": "Currency",
+    "in_list_view": 1,
+    "label": "Cash Drawn",
+    "options": "company:company_currency",
+    "read_only": 1
   },
   {
    "fieldname": "closing_amount",

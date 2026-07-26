@@ -315,6 +315,7 @@ fixtures = [
                     "POS Profile-custom_print_two_unpaid_invoices",
                     "POS Profile-custom_remove_stock_balance_pos",
                     "POS Profile-custom_input_customer_details_pos",
+                    "POS Profile-posa_enable_cash_draw",
                     "Mode of Payment-custom_enforce_payment_reference",
                 ),
             ]

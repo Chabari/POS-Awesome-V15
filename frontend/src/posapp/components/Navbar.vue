@@ -76,7 +76,7 @@
 			v-model:item="item"
 			:company="company"
 			:company-img="companyImg"
-			:items="items"
+			:items="visibleItems"
 			@change-page="changePage"
 		/>
 
@@ -213,6 +213,7 @@ export default {
 			items: [
 				{ text: "POS", icon: "mdi-network-pos" },
 				{ text: "Payments", icon: "mdi-credit-card" },
+				{ text: "Cash Draw", page: "CashDraw", icon: "mdi-cash-minus" },
 			],
 			company: "POS Awesome",
 			companyImg: posLogo,
@@ -255,6 +256,11 @@ export default {
 		},
 	},
 	computed: {
+		visibleItems() {
+			return this.items.filter(
+				(item) => item.page !== "CashDraw" || Number(this.posProfile?.posa_enable_cash_draw) === 1,
+			);
+		},
 		appBarColor() {
 			return this.isDark ? this.$vuetify.theme.themes.dark.colors.surface : "white";
 		},

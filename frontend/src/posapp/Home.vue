@@ -50,6 +50,7 @@
 import Navbar from "./components/Navbar.vue";
 import POS from "./components/pos/Pos.vue";
 import Payments from "./components/payments/Pay.vue";
+import CashDraw from "./components/cash_draw/CashDraw.vue";
 import ClosingDialog from "./components/pos/ClosingDialog.vue";
 import AppLoadingOverlay from "./components/ui/LoadingOverlay.vue";
 import UpdatePrompt from "./components/ui/UpdatePrompt.vue";
@@ -149,6 +150,14 @@ export default {
 		},
 	},
 	watch: {
+		posProfile: {
+			handler(profile) {
+				if (this.page === "CashDraw" && Number(profile?.posa_enable_cash_draw) !== 1) {
+					this.page = "POS";
+				}
+			},
+			deep: true,
+		},
 		networkOnline(newVal, oldVal) {
 			if (newVal && !oldVal) {
 				if (this._shouldPauseBackgroundCalls()) {
@@ -173,6 +182,7 @@ export default {
 		Navbar,
 		POS,
 		Payments,
+		CashDraw,
 		ClosingDialog,
 		AppLoadingOverlay,
 		UpdatePrompt,

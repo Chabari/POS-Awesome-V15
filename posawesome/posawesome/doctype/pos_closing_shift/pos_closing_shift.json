@@ -29,8 +29,10 @@
   "grand_total",
   "net_total",
   "total_quantity",
+  "total_cash_drawn",
   "column_break_16",
   "taxes",
+  "cash_draw_journal_entry",
   "section_break_14",
   "amended_from"
  ],
@@ -157,6 +159,14 @@
    "read_only": 1
   },
   {
+   "default": "0",
+   "fieldname": "total_cash_drawn",
+   "fieldtype": "Currency",
+   "label": "Total Cash Drawn",
+   "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
    "fieldname": "column_break_16",
    "fieldtype": "Column Break"
   },
@@ -170,6 +180,15 @@
   {
    "fieldname": "section_break_14",
    "fieldtype": "Section Break"
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "cash_draw_journal_entry",
+   "fieldtype": "Link",
+   "label": "Cash Draw Journal Entry",
+   "no_copy": 1,
+   "options": "Journal Entry",
+   "read_only": 1
   },
   {
    "fieldname": "amended_from",
