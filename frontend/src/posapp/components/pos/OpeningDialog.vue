@@ -59,6 +59,13 @@
 										<v-icon class="section-icon">mdi-gas-station</v-icon>
 										{{ __("Opening Nozzle Readings") }}
 									</h6>
+									<p class="section-note" v-if="nozzleReadingsReadonly">
+										{{
+											__(
+												"Carried forward from the last shift close. Contact a Fuel Manager if a meter looks wrong.",
+											)
+										}}
+									</p>
 								</div>
 
 								<v-data-table
@@ -71,7 +78,11 @@
 									density="compact"
 								>
 									<template v-slot:item.current_reading="{ item }">
+										<div v-if="nozzleReadingsReadonly" class="reading-readonly">
+											{{ formatFloat(item.current_reading || 0, 3) }}
+										</div>
 										<v-text-field
+											v-else
 											v-model="item.current_reading"
 											type="number"
 											density="compact"
@@ -278,6 +289,11 @@ export default {
 
 			const profileFuelData = this.fuel_customization_data[this.pos_profile] || {};
 			return !!profileFuelData.enabled;
+		},
+
+		nozzleReadingsReadonly() {
+			const profileFuelData = this.fuel_customization_data[this.pos_profile] || {};
+			return profileFuelData.readings_readonly !== false;
 		},
 	},
 
@@ -497,6 +513,19 @@ export default {
 .section-icon {
 	color: #1976d2;
 	font-size: 18px;
+}
+
+.section-note {
+	font-size: 0.75rem;
+	color: var(--pos-text-secondary, #6c757d);
+	margin: 2px 0 0 24px;
+}
+
+.reading-readonly {
+	font-weight: 600;
+	text-align: center;
+	padding: 6px 0;
+	letter-spacing: 0.5px;
 }
 
 /* Form Fields - Compact */

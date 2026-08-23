@@ -84,6 +84,44 @@
 				</div>
 				<!-- Section end -->
 
+                                        <!-- Cash draw section -->
+                                        {% set cash_draws = frappe.get_all(
+                                                "POS Cash Draw",
+                                                filters={"pos_closing_shift": data.name, "docstatus": 1},
+                                                fields=["posting_date", "posting_time", "mode_of_payment", "amount", "narration"],
+                                                order_by="posting_date asc, posting_time asc, creation asc",
+                                        ) %}
+                                        {% if cash_draws %}
+                                        <div>
+                                                <h6 class="text-center uppercase" style="color: #8D99A6">{{ _("POS Cash Draw") }}</h6>
+                                                <div class="tax-break-up" style="overflow-x: auto;">
+                                                        <table class="table table-bordered table-hover">
+                                                                <thead>
+                                                                        <tr>
+                                                                                <th class="text-left">{{ _("Posting Date") }}</th>
+                                                                                <th class="text-left">{{ _("Posting Time") }}</th>
+                                                                                <th class="text-left">{{ _("Mode of Payment") }}</th>
+                                                                                <th class="text-right">{{ _("Amount") }}</th>
+                                                                                <th class="text-left">{{ _("Narration") }}</th>
+                                                                        </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                        {% for d in cash_draws %}
+                                                                        <tr>
+                                                                                <td class="text-left">{{ d.posting_date }}</td>
+                                                                                <td class="text-left">{{ d.posting_time }}</td>
+                                                                                <td class="text-left">{{ d.mode_of_payment }}</td>
+                                                                                <td class="text-right">{{ frappe.utils.fmt_money(d.amount, currency=company_currency or currency) }}</td>
+                                                                                <td class="text-left">{{ d.narration }}</td>
+                                                                        </tr>
+                                                                        {% endfor %}
+                                                                </tbody>
+                                                        </table>
+                                                </div>
+                                        </div>
+                                        {% endif %}
+                                        <!-- Section end -->
+
                                 <!-- Taxes section -->
                                 {% if data.taxes %}
                                 <div>

@@ -87,6 +87,35 @@ def _row_key(row):
     )
 
 
+def _row_test_return(row):
+    row_dict = _row_as_dict(row)
+    return max(flt(row_dict.get("test_return_qty") or 0), 0)
+
+
+def _row_meter_digits(row):
+    row_dict = _row_as_dict(row)
+    return cint(row_dict.get("meter_digits") or 0) or 6
+
+
+def _compute_dispensed(opening_reading, closing_reading, meter_digits=6):
+    """Gross litres between two meter readings, correcting a meter rollover.
+
+    Returns (dispensed_qty, rolled_over). Kept local so POS Awesome carries no
+    hard dependency on the Fuel App.
+    """
+    opening_reading = flt(opening_reading)
+    closing_reading = flt(closing_reading)
+
+    if closing_reading >= opening_reading:
+        return closing_reading - opening_reading, False
+
+    wrap_at = float(10 ** (cint(meter_digits) or 6))
+    if opening_reading > wrap_at * 0.9 and closing_reading < wrap_at * 0.1:
+        return (wrap_at - opening_reading) + closing_reading, True
+
+    return 0.0, False
+
+
 def _row_item_warehouse_key(row):
     row_dict = _row_as_dict(row)
     return (
@@ -95,16 +124,35 @@ def _row_item_warehouse_key(row):
     )
 
 
+def _aggregate_by_item(by_item_warehouse):
+    """Collapse an {(item, warehouse): qty} map into {item: qty}."""
+    totals = defaultdict(float)
+    for (item_code, _warehouse), qty in (by_item_warehouse or {}).items():
+        if item_code:
+            totals[item_code] += flt(qty)
+    return totals
+
+
 def _validate_shared_tank_closing_readings(opening_shift_doc, nozzle_closing_readings, sold_by_item_warehouse):
+    """Every fuel item that sold must have at least one nozzle meter that moved.
+
+    Grouped per item, not per tank: invoice lines rarely carry the nozzle's
+    tank warehouse, so per-tank sold quantities are not reliable. The meter,
+    not the invoice total, is what the shift is reconciled against, so a
+    closing reading that was never actually read cannot be accepted.
+    """
     closing_rows_map = {}
     for row in nozzle_closing_readings or []:
         row_dict = _row_as_dict(row)
         closing_rows_map[_row_key(row_dict)] = _row_closing_reading(row_dict)
 
+    sold_by_item = _aggregate_by_item(sold_by_item_warehouse)
+
     nozzle_groups = defaultdict(list)
     for row in opening_shift_doc.get("custom_nozzle_readings") or []:
         row_dict = _row_as_dict(row)
-        nozzle_groups[_row_item_warehouse_key(row_dict)].append(
+        item_code = (row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "").strip()
+        nozzle_groups[item_code].append(
             {
                 "row_key": _row_key(row_dict),
                 "nozzle": _row_nozzle_value(row_dict),
@@ -113,11 +161,8 @@ def _validate_shared_tank_closing_readings(opening_shift_doc, nozzle_closing_rea
         )
 
     invalid_groups = []
-    for item_warehouse_key, group_rows in nozzle_groups.items():
-        if len(group_rows) <= 1:
-            continue
-
-        sold_qty = flt(sold_by_item_warehouse.get(item_warehouse_key) or 0)
+    for item_code, group_rows in nozzle_groups.items():
+        sold_qty = flt(sold_by_item.get(item_code) or 0)
         if sold_qty <= 0:
             continue
 
@@ -128,11 +173,9 @@ def _validate_shared_tank_closing_readings(opening_shift_doc, nozzle_closing_rea
         ):
             continue
 
-        item_code, warehouse = item_warehouse_key
         invalid_groups.append(
-            _("{0} in {1} ({2} nozzles, tank sales {3})").format(
+            _("{0} ({1} nozzles, invoiced sales {2})").format(
                 frappe.bold(item_code or _("Unknown Item")),
-                frappe.bold(warehouse or _("No Warehouse")),
                 len(group_rows),
                 sold_qty,
             )
@@ -141,17 +184,25 @@ def _validate_shared_tank_closing_readings(opening_shift_doc, nozzle_closing_rea
     if invalid_groups:
         frappe.throw(
             _(
-                "Shared-tank nozzle readings require actual nozzle meter entry before closing. "
-                "The following tank groups still match opening readings:<br><ul>{0}</ul>"
+                "Actual nozzle meter readings are required before closing. "
+                "The following tanks sold fuel but still show their opening readings:<br><ul>{0}</ul>"
             ).format("".join(f"<li>{group}</li>" for group in invalid_groups))
         )
 
 
 def _update_opening_nozzle_rows_and_get_dispensed(opening_shift_doc, nozzle_closing_readings):
+    """Write the captured meters back onto the opening shift and return net litres.
+
+    Net means gross meter throughput minus fuel pumped for pump testing and
+    poured back into the tank, which the meter counts but the tank never lost.
+    """
     closing_rows_map = {}
+    test_return_map = {}
     for row in nozzle_closing_readings or []:
         row_dict = _row_as_dict(row)
-        closing_rows_map[_row_key(row_dict)] = _row_closing_reading(row_dict)
+        key = _row_key(row_dict)
+        closing_rows_map[key] = _row_closing_reading(row_dict)
+        test_return_map[key] = _row_test_return(row_dict)
 
     dispensed_by_item_warehouse = defaultdict(float)
     for row in opening_shift_doc.get("custom_nozzle_readings") or []:
@@ -159,36 +210,50 @@ def _update_opening_nozzle_rows_and_get_dispensed(opening_shift_doc, nozzle_clos
         row_key = _row_key(row_dict)
         opening_reading = _row_opening_reading(row_dict)
         closing_reading = closing_rows_map.get(row_key, _row_closing_reading(row_dict))
-        if closing_reading < opening_reading:
-            closing_reading = opening_reading
+        meter_digits = _row_meter_digits(row_dict)
 
+        dispensed, rolled_over = _compute_dispensed(opening_reading, closing_reading, meter_digits)
+        if not rolled_over and closing_reading < opening_reading:
+            closing_reading = opening_reading
+            dispensed = 0.0
+
+        test_return_qty = min(flt(test_return_map.get(row_key) or 0), flt(dispensed))
         row_dict["closing_reading"] = closing_reading
 
-        # POS Opening Shift is submitted at this stage; update child row directly.
+        # POS Opening Shift is submitted at this stage; update child rows directly.
         child_row_name = row_dict.get("name")
         child_doctype = row_dict.get("doctype") or getattr(row, "doctype", None)
         if child_row_name and child_doctype:
-            frappe.db.set_value(
-                child_doctype,
-                child_row_name,
-                "closing_reading",
-                closing_reading,
-                update_modified=False,
-            )
+            child_meta = frappe.get_meta(child_doctype)
+            updates = {"closing_reading": closing_reading}
+            if child_meta.has_field("dispensed_qty"):
+                updates["dispensed_qty"] = flt(dispensed)
+            if child_meta.has_field("test_return_qty"):
+                updates["test_return_qty"] = flt(test_return_qty)
+            if child_meta.has_field("meter_digits"):
+                updates["meter_digits"] = meter_digits
+            if child_meta.has_field("reading_source"):
+                updates["reading_source"] = "Rollover Corrected" if rolled_over else "Manual"
+            frappe.db.set_value(child_doctype, child_row_name, updates, update_modified=False)
 
         fuel_item = row_dict.get("fuel_item") or row_dict.get("custom_fuel_item")
         warehouse = row_dict.get("warehouse") or row_dict.get("custom_warehouse") or ""
         if fuel_item:
-            dispensed_by_item_warehouse[(fuel_item, warehouse)] += flt(closing_reading - opening_reading)
+            dispensed_by_item_warehouse[(fuel_item, warehouse)] += flt(dispensed) - flt(
+                test_return_qty
+            )
 
     return dispensed_by_item_warehouse
 
 
 def _update_shift_nozzle_rows(doc, nozzle_closing_readings, child_fieldname="custom_nozzle_readings"):
     closing_rows_map = {}
+    test_return_map = {}
     for row in nozzle_closing_readings or []:
         row_dict = _row_as_dict(row)
-        closing_rows_map[_row_key(row_dict)] = _row_closing_reading(row_dict)
+        key = _row_key(row_dict)
+        closing_rows_map[key] = _row_closing_reading(row_dict)
+        test_return_map[key] = _row_test_return(row_dict)
 
     if not closing_rows_map:
         return
@@ -203,7 +268,17 @@ def _update_shift_nozzle_rows(doc, nozzle_closing_readings, child_fieldname="cus
             updated_rows.append(row_dict)
             continue
 
-        row_dict["closing_reading"] = max(flt(closing_reading), flt(opening_reading))
+        meter_digits = _row_meter_digits(row_dict)
+        dispensed, rolled_over = _compute_dispensed(opening_reading, closing_reading, meter_digits)
+        if not rolled_over and flt(closing_reading) < flt(opening_reading):
+            closing_reading = opening_reading
+            dispensed = 0.0
+
+        row_dict["closing_reading"] = flt(closing_reading)
+        row_dict["dispensed_qty"] = flt(dispensed)
+        row_dict["test_return_qty"] = min(flt(test_return_map.get(row_key) or 0), flt(dispensed))
+        row_dict["meter_digits"] = meter_digits
+        row_dict["reading_source"] = "Rollover Corrected" if rolled_over else "Manual"
         updated_rows.append(row_dict)
 
     if updated_rows:
@@ -211,7 +286,14 @@ def _update_shift_nozzle_rows(doc, nozzle_closing_readings, child_fieldname="cus
         doc.save(ignore_permissions=True)
 
 
-def _get_shift_sold_by_item(opening_shift_name, pos_profile):
+def _get_shift_sold_by_item(opening_shift_name, pos_profile, exclude_invoices=None):
+    """Invoiced quantities per (item, warehouse) for the shift.
+
+    A deficit invoice from an earlier (cancelled) close stays counted as sold
+    while it is submitted: it also sits in the shift grand total, so the two
+    cancel out. `exclude_invoices` exists for the repair path, which cancels
+    the inflated invoice it excludes.
+    """
     sold_by_item_warehouse = defaultdict(float)
     use_pos_invoice = frappe.db.get_value(
         "POS Profile",
@@ -229,6 +311,8 @@ def _get_shift_sold_by_item(opening_shift_name, pos_profile):
         },
         pluck="name",
     )
+    excluded = set(exclude_invoices or [])
+    invoice_names = [name for name in invoice_names if name not in excluded]
 
     if not invoice_names:
         return sold_by_item_warehouse
@@ -244,6 +328,43 @@ def _get_shift_sold_by_item(opening_shift_name, pos_profile):
             sold_by_item_warehouse[(item.get("item_code"), warehouse)] += flt(item.get("qty") or 0)
 
     return sold_by_item_warehouse
+
+
+def _allocate_item_deficits_to_tanks(dispensed_by_item_warehouse, sold_by_item_warehouse):
+    """Unbilled litres netted per fuel item, split back over its tanks pro rata.
+
+    Sales invoices rarely carry the nozzle's tank warehouse and one item is
+    often dispensed from several tanks, so a per-tank deficit double counts
+    fuel that was already billed. Only the per-item net is real; the per-tank
+    split is informational (the deficit invoice posts no stock).
+    """
+    dispensed_by_item = _aggregate_by_item(dispensed_by_item_warehouse)
+    sold_by_item = _aggregate_by_item(sold_by_item_warehouse)
+
+    deficit_by_item_warehouse = {}
+    for item_code, dispensed_total in dispensed_by_item.items():
+        if flt(dispensed_total) <= 0:
+            continue
+        deficit_qty = flt(dispensed_total) - max(flt(sold_by_item.get(item_code) or 0), 0)
+        if deficit_qty <= 0:
+            continue
+
+        tanks = sorted(
+            (warehouse, flt(qty))
+            for (item, warehouse), qty in dispensed_by_item_warehouse.items()
+            if item == item_code and flt(qty) > 0
+        )
+        remaining = flt(deficit_qty)
+        for index, (warehouse, qty) in enumerate(tanks):
+            if index == len(tanks) - 1:
+                share = remaining
+            else:
+                share = flt(deficit_qty) * flt(qty) / flt(dispensed_total)
+                remaining -= share
+            if share > 0:
+                deficit_by_item_warehouse[(item_code, warehouse)] = flt(share)
+
+    return deficit_by_item_warehouse
 
 
 def _update_pos_profile_nozzle_current_readings(pos_profile_doc, nozzle_closing_readings):
@@ -299,7 +420,7 @@ def _get_fuel_item_rate(item_code, price_list=None):
     return flt(frappe.get_cached_value("Item", item_code, "standard_rate") or 0)
 
 
-def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, deficit_by_item_warehouse):
+def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, deficit_by_item_warehouse, posting_date=None):
     if not deficit_by_item_warehouse:
         return None
 
@@ -310,8 +431,10 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
     invoice = frappe.new_doc("Sales Invoice")
     invoice.customer = customer
     invoice.company = closing_shift_doc.company
-    invoice.posting_date = nowdate()
-    invoice.due_date = nowdate()
+    invoice.posting_date = posting_date or nowdate()
+    invoice.due_date = posting_date or nowdate()
+    if posting_date:
+        invoice.set_posting_time = 1
     invoice.is_pos = 1
     invoice.update_stock = 0
     invoice.pos_profile = pos_profile_doc.name
@@ -329,6 +452,7 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
     invoice.remarks = _("Unreconciled fuel quantity invoice generated during POS shift closing.")
 
     price_list = pos_profile_doc.get("selling_price_list")
+    row_warehouses = {}
     for (item_code, warehouse), qty in sorted(deficit_by_item_warehouse.items()):
         if flt(qty) <= 0:
             continue
@@ -340,14 +464,20 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
         }
         if warehouse:
             item_row["warehouse"] = warehouse
-        invoice.append("items", item_row)
+        row = invoice.append("items", item_row)
+        row_warehouses[row.idx] = warehouse
 
     if not invoice.get("items"):
         return None
 
     invoice.flags.ignore_permissions = True
     invoice.set_missing_values()
+    # set_pos_fields re-applies the POS Profile warehouse and update_stock over
+    # what was set above, so both must be re-asserted after set_missing_values.
     invoice.update_stock = 0
+    for row in invoice.get("items"):
+        if row_warehouses.get(row.idx):
+            row.warehouse = row_warehouses[row.idx]
     invoice.calculate_taxes_and_totals()
 
     cash_mode = pos_profile_doc.get("posa_cash_mode_of_payment") or "Cash"
@@ -364,6 +494,11 @@ def _attach_fuel_invoice_to_closing(closing_shift_doc, invoice):
     """Add a generated fuel invoice to Linked Invoices and refresh shift totals."""
     if not invoice:
         return
+
+    # Tagged so the meter versus invoice gap can be measured against what was
+    # billed during the shift, not against this corrective invoice.
+    if frappe.get_meta("POS Closing Shift").has_field("custom_fuel_unreconciled_invoice"):
+        closing_shift_doc.custom_fuel_unreconciled_invoice = invoice.name
 
     closing_shift_doc.append(
         "pos_transactions",
@@ -404,33 +539,69 @@ def _get_shift_credit_total(opening_shift_name, pos_profile):
     return sum(flt(r.outstanding_amount) * flt(r.conversion_rate or 1) for r in rows)
 
 
-def _apply_fuel_payment_reconciliation(closing_shift_doc, pos_profile_doc, total_fuel_amount, credit_total=0):
-    """Set the cash mode expected amount to total fuel sales minus credit.
+def _apply_fuel_payment_reconciliation(closing_shift_doc, pos_profile_doc, credit_total=0):
+    """Balance every tender against the shift grand total (meter derived).
+
+    With the deficit invoice attached, the shift grand total equals the metered
+    fuel value (plus any non-fuel sales), so the meters stay the single source
+    of truth. Every shilling of (grand total - credit) must sit in some tender:
+    still in the drawer (closing) or already taken out (cash_drawn). Non-cash
+    modes reconcile to whatever the cashier declares; the cash mode expected is
+    the balancing remainder, so the identity
+
+        sum(closing - opening + cash_drawn) + credit = grand total
+
+    always holds. The cashier's declared cash closing is never overwritten -
+    a real cash shortage surfaces as a difference instead of being hidden.
 
     Credit sales are intentionally not pushed into payment_reconciliation: in
     ERPNext credit invoices carry no mode of payment, so they are shown only as
-    a generic informational row in the closing dialog, not reconciled here. The
-    default (cash) mode therefore carries every non-credit fuel sale.
+    an informational row in the closing dialog.
     """
     cash_mode = pos_profile_doc.get("posa_cash_mode_of_payment") or "Cash"
-    expected = flt(total_fuel_amount) - flt(credit_total)
 
-    cash_row = next(
-        (r for r in closing_shift_doc.payment_reconciliation if r.mode_of_payment == cash_mode),
-        None,
-    )
-    if cash_row:
-        cash_row.expected_amount = expected - flt(cash_row.get("cash_drawn"))
-    else:
-        closing_shift_doc.append(
+    cash_row = None
+    other_collected = 0.0
+    for row in closing_shift_doc.payment_reconciliation:
+        if row.mode_of_payment == cash_mode:
+            cash_row = row
+            continue
+        closing = flt(row.get("closing_amount"))
+        # The declaration reconciles to itself; whatever it carries (plus what
+        # was drawn out of it) is money that never reaches the cash drawer.
+        row.expected_amount = closing
+        other_collected += closing - flt(row.get("opening_amount")) + flt(row.get("cash_drawn"))
+
+    if cash_row is None:
+        cash_row = closing_shift_doc.append(
             "payment_reconciliation",
             {
                 "mode_of_payment": cash_mode,
                 "opening_amount": 0,
+                "closing_amount": 0,
                 "cash_drawn": 0,
-                "expected_amount": expected,
+                "expected_amount": 0,
             },
         )
+
+    expected_cash = (
+        flt(closing_shift_doc.grand_total)
+        - flt(credit_total)
+        - other_collected
+        - flt(cash_row.get("cash_drawn"))
+        + flt(cash_row.get("opening_amount"))
+    )
+    expected_cash = flt(expected_cash, 2)
+
+    if expected_cash < -0.005:
+        frappe.throw(
+            _(
+                "Declared tenders plus cash draws exceed the shift total by {0}. "
+                "The nozzle meters are the source of truth; review the closing amounts."
+            ).format(frappe.bold(abs(expected_cash)))
+        )
+
+    cash_row.expected_amount = expected_cash
 
 
 def _apply_cash_draw_reconciliation(
@@ -1824,6 +1995,14 @@ def make_closing_shift_from_opening(opening_shift):
     closing_shift.set("taxes", taxes)
     closing_shift.set("pos_payments", pos_payments_table)
 
+    # Snapshot per-mode sales before cash draws mutate expected_amount, so the
+    # closing dialog can seed its reconciliation from clean figures.
+    mode_shift_sales = {
+        p.mode_of_payment: flt(p.expected_amount) - flt(p.opening_amount)
+        for p in payments
+        if p.get("mode_of_payment")
+    }
+
     cash_draws = get_unposted_cash_draws(closing_shift.pos_opening_shift)
     _apply_cash_draw_reconciliation(closing_shift, cash_draws)
 
@@ -1833,6 +2012,7 @@ def make_closing_shift_from_opening(opening_shift):
         and frappe.get_meta("POS Opening Shift").has_field("custom_nozzle_readings")
     ):
         sold_by_item_warehouse = _get_shift_sold_by_item(opening_shift_doc.name, closing_shift.pos_profile)
+        sold_by_item = _aggregate_by_item(sold_by_item_warehouse)
         nozzle_count_by_item_warehouse = defaultdict(int)
         for row in opening_shift_doc.get("custom_nozzle_readings") or []:
             nozzle_count_by_item_warehouse[_row_item_warehouse_key(row)] += 1
@@ -1846,7 +2026,6 @@ def make_closing_shift_from_opening(opening_shift):
             fuel_item, warehouse = _row_item_warehouse_key(row_data)
             sold_qty = flt(sold_by_item_warehouse.get((fuel_item, warehouse)) or 0)
             nozzle_count = nozzle_count_by_item_warehouse.get((fuel_item, warehouse), 0)
-            require_manual_closing = nozzle_count > 1 and sold_qty > 0
             nozzle_rows.append(
                 {
                     "nozzle": row_data.get("nozzle") or row_data.get("nozzle_name") or "",
@@ -1854,16 +2033,18 @@ def make_closing_shift_from_opening(opening_shift):
                     "fuel_pump": row_data.get("fuel_pump") or "",
                     "warehouse": warehouse,
                     "opening_reading": opening_reading,
-                    "closing_reading": flt(opening_reading + sold_qty)
-                    if nozzle_count <= 1
-                    else opening_reading,
+                    # Never seeded from invoiced sales: the meter has to be read.
+                    "closing_reading": opening_reading,
+                    "meter_digits": _row_meter_digits(row_data),
+                    "test_return_qty": 0,
                 }
             )
             nozzle_row_meta.append(
                 {
                     "expected_sold_qty": sold_qty,
                     "shared_tank_nozzle_count": nozzle_count,
-                    "require_manual_closing": require_manual_closing,
+                    "require_manual_closing": True,
+                    "meter_digits": _row_meter_digits(row_data),
                     "rate": _get_fuel_item_rate(fuel_item, fuel_price_list),
                 }
             )
@@ -1873,6 +2054,12 @@ def make_closing_shift_from_opening(opening_shift):
 
     response = closing_shift.as_dict()
     response["custom_nozzle_reading_meta"] = nozzle_row_meta if 'nozzle_row_meta' in locals() else []
+    response["custom_fuel_sold_by_item"] = (
+        {item: flt(qty) for item, qty in sold_by_item.items()} if 'sold_by_item' in locals() else {}
+    )
+    response["custom_fuel_mode_shift_sales"] = {
+        mode: flt(amount) for mode, amount in mode_shift_sales.items()
+    }
     response["custom_fuel_cash_mode_of_payment"] = (
         frappe.db.get_value("POS Profile", closing_shift.pos_profile, "posa_cash_mode_of_payment") or "Cash"
     )
@@ -1904,15 +2091,6 @@ def submit_closing_shift(closing_shift):
     if submitted_cash_draw_names != current_cash_draw_names:
         frappe.throw(_("Cash draws changed while the closing dialog was open. Reopen it and review the totals."))
 
-    _apply_cash_draw_reconciliation(
-        closing_shift_doc,
-        cash_draws,
-        expected_includes_existing_draw=True,
-        validate_available=True,
-    )
-    closing_shift_doc.flags.ignore_permissions = True
-    closing_shift_doc.save()
-
     can_apply_fuel_reconciliation = (
         cint(
             frappe.db.get_value(
@@ -1926,6 +2104,18 @@ def submit_closing_shift(closing_shift):
         and frappe.get_meta("POS Opening Shift").has_field("custom_nozzle_readings")
         and frappe.get_meta("POS Profile").has_field("custom_pump_nozzles")
     )
+
+    _apply_cash_draw_reconciliation(
+        closing_shift_doc,
+        cash_draws,
+        expected_includes_existing_draw=True,
+        # On a fuel profile a mode may legitimately be overdrawn against its
+        # recorded sales: unbilled metered fuel covers it. The aggregate is
+        # validated against the meters in _apply_fuel_payment_reconciliation.
+        validate_available=not can_apply_fuel_reconciliation,
+    )
+    closing_shift_doc.flags.ignore_permissions = True
+    closing_shift_doc.save()
 
     opening_shift_doc = None
     pos_profile_doc = None
@@ -1954,15 +2144,10 @@ def submit_closing_shift(closing_shift):
         _update_shift_nozzle_rows(closing_shift_doc, nozzle_closing_readings)
 
     if can_apply_fuel_reconciliation and nozzle_closing_readings:
-        deficit_by_item_warehouse = {}
-        total_fuel_amount = 0
-        price_list = pos_profile_doc.get("selling_price_list")
-        for (item_code, warehouse), dispensed_qty in dispensed_by_item_warehouse.items():
-            total_fuel_amount += flt(dispensed_qty) * _get_fuel_item_rate(item_code, price_list)
-            sold_qty = max(flt(sold_by_item_warehouse.get((item_code, warehouse)) or 0), 0)
-            deficit_qty = flt(dispensed_qty) - sold_qty
-            if deficit_qty > 0:
-                deficit_by_item_warehouse[(item_code, warehouse)] = flt(deficit_qty)
+        deficit_by_item_warehouse = _allocate_item_deficits_to_tanks(
+            dispensed_by_item_warehouse,
+            sold_by_item_warehouse,
+        )
 
         fuel_invoice = _create_unreconciled_fuel_invoice(
             closing_shift_doc,
@@ -1976,7 +2161,6 @@ def submit_closing_shift(closing_shift):
         _apply_fuel_payment_reconciliation(
             closing_shift_doc,
             pos_profile_doc,
-            total_fuel_amount,
             credit_total,
         )
         _update_pos_profile_nozzle_current_readings(pos_profile_doc, nozzle_closing_readings)

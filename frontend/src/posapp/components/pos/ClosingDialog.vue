@@ -845,7 +845,78 @@
 										class="pos-themed-input"
 									/>
 								</template>
+								<template v-slot:item.test_return_qty="{ item }">
+									<v-text-field
+										v-model="item.test_return_qty"
+										@input="recomputeFuelExpected"
+										@blur="enforceClosingReadingMin(item)"
+										type="number"
+										min="0"
+										step="0.001"
+										density="compact"
+										variant="outlined"
+										color="primary"
+										hide-details
+										class="pos-themed-input"
+									/>
+								</template>
 							</v-data-table>
+
+							<div
+								v-if="showFuelClosingReadingsTable && fuelReconciliationSummary"
+								class="fuel-summary mb-6"
+							>
+								<table class="fuel-summary-table">
+									<thead>
+										<tr>
+											<th>{{ __("Fuel Item") }}</th>
+											<th class="text-right">{{ __("Metered (L)") }}</th>
+											<th class="text-right">{{ __("Invoiced (L)") }}</th>
+											<th class="text-right">{{ __("Difference (L)") }}</th>
+											<th class="text-right">{{ __("Difference Value") }}</th>
+										</tr>
+									</thead>
+									<tbody>
+										<tr
+											v-for="row in fuelReconciliationSummary.items"
+											:key="`fuel-sum-${row.fuel_item}`"
+										>
+											<td>{{ row.fuel_item }}</td>
+											<td class="text-right">{{ formatFloat(row.metered, 3) }}</td>
+											<td class="text-right">{{ formatFloat(row.invoiced, 3) }}</td>
+											<td class="text-right" :class="fuelRowDifferenceClass(row.difference)">
+												{{ formatFloat(row.difference, 3) }}
+											</td>
+											<td class="text-right" :class="fuelRowDifferenceClass(row.difference)">
+												{{ companyCurrencySymbol }} {{ formatCurrency(row.value) }}
+											</td>
+										</tr>
+										<tr class="fuel-summary-total">
+											<td>{{ __("Total") }}</td>
+											<td class="text-right">
+												{{ formatFloat(fuelReconciliationSummary.metered, 3) }}
+											</td>
+											<td class="text-right">
+												{{ formatFloat(fuelReconciliationSummary.invoiced, 3) }}
+											</td>
+											<td class="text-right" :class="fuelDifferenceClass">
+												{{ formatFloat(fuelReconciliationSummary.difference, 3) }}
+											</td>
+											<td class="text-right" :class="fuelDifferenceClass">
+												{{ companyCurrencySymbol }}
+												{{ formatCurrency(fuelReconciliationSummary.value) }}
+											</td>
+										</tr>
+									</tbody>
+								</table>
+								<div class="fuel-summary-note">
+									{{
+										__(
+											"Fuel pumped but not billed is invoiced to this shift and must be handed over in cash.",
+										)
+									}}
+								</div>
+							</div>
 
 							<div class="table-header mb-4">
 								<h4 class="text-h6 text-grey-darken-2 mb-1">
@@ -884,7 +955,7 @@
 										class="pos-themed-input"
 										hide-details
 										:prefix="companyCurrencySymbol"
-										@input="recomputeFuelExpected"
+										@input="onClosingAmountInput(props.item)"
 									></v-text-field>
 								</template>
 								<template v-slot:item.difference="{ item }">
@@ -957,6 +1028,8 @@ export default {
 		headers: [],
 		cashModeOfPayment: "",
 		fuelCreditTotal: 0,
+		fuelModeShiftSales: {},
+		fuelSoldByItem: {},
 		nozzleClosingReadings: [],
 		nozzleClosingReadingErrors: {},
 		nozzleClosingHeaders: [
@@ -966,6 +1039,7 @@ export default {
 			{ title: __("Fuel Tank"), value: "warehouse", align: "start", sortable: false },
 			{ title: __("Opening Reading"), value: "opening_reading", align: "end", sortable: false },
 			{ title: __("Closing Reading"), value: "closing_reading", align: "end", sortable: false },
+			{ title: __("Test Return (L)"), value: "test_return_qty", align: "end", sortable: false },
 		],
 		baseHeaders: [
 			{
@@ -1087,29 +1161,41 @@ export default {
 		},
 		sharedTankReadingError(item) {
 			return this.__(
-				"This tank had sales across {0} nozzles. Enter actual nozzle closing readings before submitting.",
+				"This tank is served by {0} nozzles. Enter the actual meter reading for each nozzle before submitting.",
 				[item?.shared_tank_nozzle_count || 0],
 			);
 		},
 		closingReadingHint(item) {
-			if (!item?.require_manual_closing || Number(item.expected_sold_qty || 0) <= 0) {
-				return "";
+			if (Number(item?.shared_tank_nozzle_count || 0) > 1) {
+				return this.__("Shared tank. Enter this nozzle's own meter reading.");
 			}
-
-			return this.__(
-				"Shared tank sales since opening: {0} across {1} nozzles. Enter actual nozzle meter reading.",
-				[
-					this.formatFloat(item.expected_sold_qty || 0, 3),
-					item.shared_tank_nozzle_count || 0,
-				],
-			);
+			return "";
+		},
+		meterDispensed(row) {
+			const opening = Number(row?.opening_reading || 0);
+			const closing = Number(row?.closing_reading);
+			if (!Number.isFinite(closing)) {
+				return 0;
+			}
+			if (closing >= opening) {
+				return closing - opening;
+			}
+			// A meter that wraps past its last digit is a rollover, not a typo.
+			const wrapAt = Math.pow(10, Number(row.meter_digits || 6));
+			if (opening > wrapAt * 0.9 && closing < wrapAt * 0.1) {
+				return wrapAt - opening + closing;
+			}
+			return 0;
+		},
+		netDispensed(row) {
+			return Math.max(this.meterDispensed(row) - Number(row?.test_return_qty || 0), 0);
 		},
 		validateSharedTankClosingReadings() {
 			const groupedRows = new Map();
 			let hasInvalidGroup = false;
 
 			for (const row of this.nozzleClosingReadings) {
-				if (!row?.require_manual_closing || Number(row.expected_sold_qty || 0) <= 0) {
+				if (Number(row?.expected_sold_qty || 0) <= 0) {
 					continue;
 				}
 
@@ -1121,11 +1207,7 @@ export default {
 			}
 
 			for (const rows of groupedRows.values()) {
-				const allUntouched = rows.every((row) => {
-					const openingReading = Number(row.opening_reading || 0);
-					const closingReading = Number(row.closing_reading || 0);
-					return !Number.isFinite(closingReading) || closingReading <= openingReading;
-				});
+				const allUntouched = rows.every((row) => this.meterDispensed(row) <= 0);
 
 				const errorMessage = this.sharedTankReadingError(rows[0]);
 				if (allUntouched) {
@@ -1158,15 +1240,28 @@ export default {
 				return;
 			}
 
+			if (item.closing_reading === null || item.closing_reading === "") {
+				this.setClosingReadingError(item, this.__("Enter the meter reading."));
+				return;
+			}
+
 			if (!Number.isFinite(closingReading)) {
+				this.setClosingReadingError(item, this.__("Enter the meter reading."));
+				return;
+			}
+
+			// A drop below the opening reading is only valid as a meter rollover.
+			if (closingReading < openingReading && this.meterDispensed(item) <= 0) {
+				item.closing_reading = openingReading;
 				this.setClosingReadingError(item, this.__("Readings should be above opening reading."));
 				return;
 			}
 
-			if (closingReading < openingReading) {
-				item.closing_reading = openingReading;
-				this.setClosingReadingError(item, this.__("Readings should be above opening reading."));
-				return;
+			const testReturn = Number(item.test_return_qty || 0);
+			if (testReturn < 0) {
+				item.test_return_qty = 0;
+			} else if (testReturn > this.meterDispensed(item)) {
+				item.test_return_qty = this.meterDispensed(item);
 			}
 
 			this.clearClosingReadingError(item);
@@ -1176,16 +1271,16 @@ export default {
 			if (!this.showFuelClosingReadingsTable) {
 				return;
 			}
-			// Total fuel dispensed this shift valued at selling price, regardless
-			// of how/whether it was invoiced. This is the full amount that must be
-			// reconciled across all tenders (cash + other modes) plus credit.
-			let totalFuel = 0;
-			for (const row of this.nozzleClosingReadings) {
-				const sold = Number(row.closing_reading || 0) - Number(row.opening_reading || 0);
-				if (sold > 0 && Number(row.rate || 0) > 0) {
-					totalFuel += sold * Number(row.rate);
-				}
+			// The nozzle meters are the single source of truth for the money owed.
+			// The shift total to reconcile is the invoiced sales plus the unbilled
+			// fuel per item (metered minus invoiced litres, never negative), which
+			// is exactly what the server invoices to the shift on submit.
+			const summary = this.fuelReconciliationSummary;
+			let unbilledFuel = 0;
+			for (const row of summary?.items || []) {
+				unbilledFuel += Math.max(Number(row.difference) || 0, 0) * (Number(row.rate) || 0);
 			}
+			const shiftTotal = (Number(this.dialog_data.grand_total) || 0) + unbilledFuel;
 			const credit = Number(this.fuelCreditTotal || 0);
 			const rows = this.dialog_data.payment_reconciliation || [];
 
@@ -1197,60 +1292,66 @@ export default {
 
 			// Reconcile every OTHER (non-cash) mode of payment - e.g. Mpesa.
 			//
-			// The meter readings are the single source of truth for the money
-			// owed; the payment modes are purely reconciliation lines. For each
-			// non-cash mode we:
-			//   1. Capture its immutable shift sales ONCE - the amount the POS
-			//      invoices already collected through that mode (server-provided
-			//      expected_amount). We stash it in `shift_sales` because we are
-			//      about to overwrite expected_amount for display, so it can never
-			//      be read back afterwards.
-			//   2. Seed the closing amount from that shift-sales figure on the
-			//      first pass so an untouched Mpesa is still subtracted from cash.
-			//   3. Keep expected_amount equal to whatever is currently entered so
-			//      the mode always reconciles to a zero difference (no ratcheting,
-			//      no negative variance). Whatever it carries is removed from cash.
-			let otherModesTotal = 0;
+			// Each mode's total collection is closing + cash_drawn - opening. The
+			// seed is the recorded sales through that mode less what was drawn out
+			// of it, floored at zero: a draw larger than the recorded sales was
+			// funded by unbilled fuel, so it cannot push the mode negative. The
+			// cashier may overwrite the closing (e.g. unrecorded sales received
+			// through Mpesa); the mode always reconciles to a zero difference and
+			// whatever it carries is removed from the cash remainder.
+			let otherCollected = 0;
 			for (const row of rows) {
 				if (row.is_credit_sales || row === cashRow) {
 					continue;
 				}
 
-				// The first time we ever process this row is our one chance to
-				// read the untouched server figures. Use it to stash the immutable
-				// shift sales AND to seed the closing amount - the child doctype
-				// ships a default closing_amount of 0, so we cannot rely on
-				// undefined/null to detect "untouched".
 				const firstTime = row.shift_sales === undefined || row.shift_sales === null;
 				if (firstTime) {
-					row.shift_sales = Number(row.expected_amount) || 0;
+					// Clean per-mode sales from the server, captured before cash
+					// draws were subtracted from expected_amount.
+					const modeSales = this.fuelModeShiftSales[row.mode_of_payment];
+					row.shift_sales =
+						modeSales !== undefined && modeSales !== null
+							? Number(modeSales) || 0
+							: (Number(row.expected_amount) || 0) + (Number(row.cash_drawn) || 0);
 				}
 				const shiftSales = Number(row.shift_sales) || 0;
 
 				let closing;
 				if (firstTime) {
-					// Seed with the shift sales so an untouched Mpesa is still
-					// subtracted from cash (overrides the server default of 0).
-					row.closing_amount = shiftSales;
-					closing = shiftSales;
+					closing = Math.max(
+						round2(
+							(Number(row.opening_amount) || 0) + shiftSales - (Number(row.cash_drawn) || 0),
+						),
+						0,
+					);
+					row.closing_amount = closing;
 				} else {
-					closing = Number(row.closing_amount) || 0;
+					closing = round2(Number(row.closing_amount) || 0);
 				}
 
-				closing = round2(closing);
 				row.expected_amount = closing;
-				otherModesTotal += closing;
+				otherCollected +=
+					closing - (Number(row.opening_amount) || 0) + (Number(row.cash_drawn) || 0);
 			}
 
-			if (cashRow && totalFuel > 0) {
-				// Cash stores the final balance: the meter-reading total minus
-				// credit, cash draws and every other entered tender. It is filled
-				// automatically so it always reconciles to a zero difference.
+			if (cashRow && shiftTotal > 0) {
+				// Cash carries the balancing remainder so that
+				//   sum(closing - opening + cash_drawn) + credit = shift total.
 				const cashExpected = round2(
-					totalFuel - credit - Number(cashRow.cash_drawn || 0) - otherModesTotal,
+					(Number(cashRow.opening_amount) || 0) +
+						shiftTotal -
+						credit -
+						(Number(cashRow.cash_drawn) || 0) -
+						otherCollected,
 				);
 				cashRow.expected_amount = cashExpected;
-				cashRow.closing_amount = cashExpected;
+				// Editable: the counted cash is a declaration. Auto-fill only while
+				// the cashier has not typed a figure, so a real cash shortage shows
+				// up as a difference instead of being hidden.
+				if (!cashRow.fuel_cash_closing_touched) {
+					cashRow.closing_amount = cashExpected;
+				}
 			}
 
 			const creditRow = rows.find((r) => r.is_credit_sales);
@@ -1270,6 +1371,12 @@ export default {
 			} else if (creditRow) {
 				rows.splice(rows.indexOf(creditRow), 1);
 			}
+		},
+		onClosingAmountInput(item) {
+			if (item && item.mode_of_payment === this.cashModeOfPayment) {
+				item.fuel_cash_closing_touched = true;
+			}
+			this.recomputeFuelExpected();
 		},
 		close_dialog() {
 			if (this.forceClose) {
@@ -1294,20 +1401,33 @@ export default {
 					return false;
 				}
 
-				const openingReading = Number(row.opening_reading || 0);
-				const closingReading = Number(row.closing_reading || 0);
-				return !Number.isFinite(closingReading) || closingReading < openingReading;
+				if (row.closing_reading === null || row.closing_reading === "") {
+					this.setClosingReadingError(row, this.__("Enter the meter reading."));
+					return true;
+				}
+
+				const closingReading = Number(row.closing_reading);
+				if (!Number.isFinite(closingReading)) {
+					this.setClosingReadingError(row, this.__("Enter the meter reading."));
+					return true;
+				}
+
+				return closingReading < Number(row.opening_reading || 0) && this.meterDispensed(row) <= 0;
 			});
 
 			if (invalidNozzles) {
-				alert(this.__("Closing reading must be valid and not less than opening reading."));
+				alert(
+					this.__(
+						"Every nozzle needs an actual meter reading, and it cannot be below the opening reading.",
+					),
+				);
 				return;
 			}
 
 			if (!this.validateSharedTankClosingReadings()) {
 				alert(
 					this.__(
-						"Shared-tank nozzle groups with sales require actual nozzle closing readings before submitting.",
+						"Tanks that sold fuel require actual nozzle closing readings before submitting.",
 					),
 				);
 				return;
@@ -1323,8 +1443,10 @@ export default {
 					fuel_item: row.fuel_item,
 					fuel_pump: row.fuel_pump,
 					warehouse: row.warehouse,
+					meter_digits: Number(row.meter_digits || 6),
 					opening_reading: Number(row.opening_reading || 0),
 					closing_reading: Number(row.closing_reading || 0),
+					test_return_qty: Number(row.test_return_qty || 0),
 				})),
 			};
 
@@ -1606,6 +1728,12 @@ export default {
 			}
 			return variance > 0 ? "variance-negative" : "variance-positive";
 		},
+		fuelRowDifferenceClass(difference) {
+			if (Math.abs(Number(difference) || 0) < 0.005) {
+				return "fuel-diff-ok";
+			}
+			return Number(difference) > 0 ? "fuel-diff-warn" : "fuel-diff-bad";
+		},
 	},
 
 	computed: {
@@ -1630,6 +1758,65 @@ export default {
 				Array.isArray(this.nozzleClosingReadings) &&
 				this.nozzleClosingReadings.length > 0
 			);
+		},
+		fuelReconciliationSummary() {
+			if (!this.showFuelClosingReadingsTable) {
+				return null;
+			}
+
+			// Grouped per fuel item: AGO and PMS carry different rates, so litres
+			// and money can only be compared item by item, never blended.
+			const byItem = new Map();
+			const hasSoldMap = Object.keys(this.fuelSoldByItem || {}).length > 0;
+			const invoicedByTank = new Map();
+
+			for (const row of this.nozzleClosingReadings) {
+				const itemCode = row.fuel_item || "";
+				if (!byItem.has(itemCode)) {
+					byItem.set(itemCode, {
+						fuel_item: itemCode,
+						metered: 0,
+						invoiced: hasSoldMap ? Number(this.fuelSoldByItem[itemCode] || 0) : 0,
+						rate: 0,
+					});
+				}
+				const entry = byItem.get(itemCode);
+				entry.metered += this.netDispensed(row);
+				if (!entry.rate && Number(row.rate || 0) > 0) {
+					entry.rate = Number(row.rate);
+				}
+				if (!hasSoldMap) {
+					// Fallback: expected_sold_qty is a per tank figure repeated on
+					// every nozzle of that tank, so count it once per tank.
+					const key = `${itemCode}::${row.warehouse || ""}`;
+					if (!invoicedByTank.has(key)) {
+						invoicedByTank.set(key, Number(row.expected_sold_qty || 0));
+						entry.invoiced += Number(row.expected_sold_qty || 0);
+					}
+				}
+			}
+
+			const items = Array.from(byItem.values()).map((entry) => ({
+				...entry,
+				difference: entry.metered - entry.invoiced,
+				value: (entry.metered - entry.invoiced) * entry.rate,
+			}));
+
+			const totals = items.reduce(
+				(acc, entry) => {
+					acc.metered += entry.metered;
+					acc.invoiced += entry.invoiced;
+					acc.difference += entry.difference;
+					acc.value += entry.value;
+					return acc;
+				},
+				{ metered: 0, invoiced: 0, difference: 0, value: 0 },
+			);
+
+			return { items, ...totals };
+		},
+		fuelDifferenceClass() {
+			return this.fuelRowDifferenceClass(this.fuelReconciliationSummary?.difference || 0);
 		},
 		hidePosTotals() {
 			return !!(this.pos_profile && this.pos_profile.custom_hide_pos_totals);
@@ -1942,9 +2129,6 @@ export default {
 				const openingReading = Number(
 					row.opening_reading ?? row.current_reading ?? row.custom_current_reading ?? row.reading ?? 0,
 				);
-				const closingReading = Number(
-					row.closing_reading ?? row.current_reading ?? row.custom_current_reading ?? row.reading ?? openingReading,
-				);
 
 				return {
 					row_key: `${row.nozzle || row.nozzle_name || "row"}-${index}`,
@@ -1953,15 +2137,26 @@ export default {
 					fuel_pump: row.fuel_pump || "",
 					warehouse: row.warehouse || "",
 					opening_reading: openingReading,
-					closing_reading: closingReading,
+					// Left empty on purpose: the attendant must read the meter.
+					closing_reading: null,
+					test_return_qty: 0,
+					meter_digits: Number(rowMeta.meter_digits || row.meter_digits || 6),
 					rate: Number(rowMeta.rate || 0),
 					expected_sold_qty: Number(rowMeta.expected_sold_qty || 0),
 					shared_tank_nozzle_count: Number(rowMeta.shared_tank_nozzle_count || 0),
-					require_manual_closing: Boolean(rowMeta.require_manual_closing),
+					require_manual_closing: rowMeta.require_manual_closing !== false,
 				};
 			});
 			this.cashModeOfPayment = data.custom_fuel_cash_mode_of_payment || "";
 			this.fuelCreditTotal = Number(data.custom_fuel_credit_total || 0);
+			this.fuelModeShiftSales =
+				data.custom_fuel_mode_shift_sales && typeof data.custom_fuel_mode_shift_sales === "object"
+					? data.custom_fuel_mode_shift_sales
+					: {};
+			this.fuelSoldByItem =
+				data.custom_fuel_sold_by_item && typeof data.custom_fuel_sold_by_item === "object"
+					? data.custom_fuel_sold_by_item
+					: {};
 			this.recomputeFuelExpected();
 			this.fetchOverview(data.pos_opening_shift);
 		});
@@ -2236,10 +2431,90 @@ export default {
 .cash-draw-closing-table td:first-child {
 	width: 90px;
 }
-
 .cash-draw-closing-table th:last-child,
 .cash-draw-closing-table td:last-child {
 	width: 150px;
+}
+
+.fuel-summary {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 24px;
+	padding: 12px 16px;
+	border: 1px solid var(--pos-border);
+	border-radius: 12px;
+	background: var(--pos-card-bg);
+}
+
+.fuel-summary-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.fuel-summary-table th {
+	font-size: 0.72rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--pos-text-secondary);
+	font-weight: 600;
+	padding: 4px 12px;
+	text-align: left;
+}
+
+.fuel-summary-table td {
+	font-size: 0.95rem;
+	font-weight: 600;
+	color: var(--pos-text-primary);
+	padding: 4px 12px;
+}
+
+.fuel-summary-table th.text-right,
+.fuel-summary-table td.text-right {
+	text-align: right;
+}
+
+.fuel-summary-total td {
+	border-top: 1px solid var(--pos-border);
+	font-weight: 700;
+}
+
+.fuel-summary-cell {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.fuel-summary-label {
+	font-size: 0.72rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--pos-text-secondary);
+	font-weight: 600;
+}
+
+.fuel-summary-value {
+	font-size: 1.05rem;
+	font-weight: 700;
+	color: var(--pos-text-primary);
+}
+
+.fuel-summary-note {
+	flex: 1 1 100%;
+	font-size: 0.75rem;
+	color: var(--pos-text-secondary);
+}
+
+.fuel-diff-ok {
+	color: #1b5e20;
+}
+
+.fuel-diff-warn {
+	color: #a04000;
+}
+
+.fuel-diff-bad {
+	color: #b71c1c;
 }
 
 .overview-wrapper .v-progress-circular {

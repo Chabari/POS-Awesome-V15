@@ -312,6 +312,9 @@ def apply_tax_inclusive(doc):
 
 
 def validate_shift(doc):
+    # fuel_app.repair recreates a shift's deficit invoice after the shift closed.
+    if frappe.flags.in_fuel_shift_repair:
+        return
     if doc.posa_pos_opening_shift and doc.pos_profile and doc.is_pos:
         # check if shift is open
         shift = frappe.get_cached_doc("POS Opening Shift", doc.posa_pos_opening_shift)

@@ -59,6 +59,13 @@ def _build_nozzle_payload(rows):
 
 
 def _prepare_opening_nozzle_rows(nozzle_readings, profile_nozzles=None):
+    """Build opening nozzle rows.
+
+    Readings are taken from the POS Profile, never from the browser: the opening
+    reading is the previous shift's closing reading and must not be editable at
+    the till. Fuel App re-asserts the same values in its POS Opening Shift
+    `before_submit` hook, so this is defence in depth rather than the only gate.
+    """
     profile_nozzle_map = {}
     for row in profile_nozzles or []:
         row_dict = _to_dict(row)
@@ -67,7 +74,10 @@ def _prepare_opening_nozzle_rows(nozzle_readings, profile_nozzles=None):
             (row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "").strip(),
             (row_dict.get("fuel_pump") or row_dict.get("custom_fuel_pump") or "").strip(),
         )
-        profile_nozzle_map[key] = row_dict.get("warehouse") or row_dict.get("custom_warehouse") or ""
+        profile_nozzle_map[key] = {
+            "warehouse": row_dict.get("warehouse") or row_dict.get("custom_warehouse") or "",
+            "current_reading": _extract_current_reading(row_dict),
+        }
 
     rows = []
     for row in nozzle_readings or []:
@@ -77,58 +87,17 @@ def _prepare_opening_nozzle_rows(nozzle_readings, profile_nozzles=None):
             (row_dict.get("fuel_item") or "").strip(),
             (row_dict.get("fuel_pump") or "").strip(),
         )
+        profile_row = profile_nozzle_map.get(key) or {}
         rows.append(
             {
                 "nozzle": row_dict.get("nozzle") or row_dict.get("nozzle_name") or "",
                 "fuel_item": row_dict.get("fuel_item") or "",
                 "fuel_pump": row_dict.get("fuel_pump") or "",
-                "warehouse": row_dict.get("warehouse") or profile_nozzle_map.get(key) or "",
-                "opening_reading": row_dict.get("opening_reading")
-                or row_dict.get("current_reading")
-                or 0,
+                "warehouse": row_dict.get("warehouse") or profile_row.get("warehouse") or "",
+                "opening_reading": profile_row.get("current_reading") or 0,
             }
         )
     return rows
-
-
-def _prepare_profile_nozzle_rows(existing_rows, opening_rows):
-    existing_rows = existing_rows or []
-    opening_rows = opening_rows or []
-    opening_map = {}
-    for row in opening_rows:
-        key = (
-            (row.get("nozzle") or row.get("nozzle_name") or "").strip(),
-            (row.get("fuel_item") or "").strip(),
-            (row.get("fuel_pump") or "").strip(),
-        )
-        opening_map[key] = row.get("current_reading") or row.get("opening_reading")
-
-    updated_rows = []
-    for row in existing_rows:
-        row_dict = _to_dict(row)
-        key = (
-            (
-                row_dict.get("nozzle_name")
-                or row_dict.get("custom_nozzle_name")
-                or row_dict.get("nozzle")
-                or ""
-            ).strip(),
-            (row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "").strip(),
-            (row_dict.get("fuel_pump") or row_dict.get("custom_fuel_pump") or "").strip(),
-        )
-        current_value = opening_map.get(key, _extract_current_reading(row_dict))
-        updated_rows.append(
-            {
-                "nozzle": row_dict.get("nozzle") or row_dict.get("nozzle_name") or row_dict.get("custom_nozzle_name") or "",
-                "nozzle_name": row_dict.get("nozzle_name") or row_dict.get("custom_nozzle_name") or row_dict.get("nozzle") or "",
-                "fuel_item": row_dict.get("fuel_item") or row_dict.get("custom_fuel_item") or "",
-                "fuel_pump": row_dict.get("fuel_pump") or row_dict.get("custom_fuel_pump") or "",
-                "warehouse": row_dict.get("warehouse") or row_dict.get("custom_warehouse") or "",
-                "opening_reading": current_value,
-                "current_reading": current_value,
-            }
-        )
-    return updated_rows
 
 
 @frappe.whitelist()
@@ -156,13 +125,15 @@ def get_opening_dialog_data():
 
     if include_fuel_customization and include_nozzle_table_on_profile:
         for profile in pos_profiles_data:
-            
+
             profile_name = profile.name
             pos_profile_doc = frappe.get_doc("POS Profile", profile_name)
             enabled = cint(pos_profile_doc.get("custom_enable_fuel_customization") or 0) == 1
-            print(pos_profile_doc.get("custom_pump_nozzles"))
             data["fuel_customization"][profile_name] = {
                 "enabled": enabled,
+                # Opening readings carry forward from the previous close and are
+                # displayed, not captured.
+                "readings_readonly": enabled,
                 "nozzle_readings": _build_nozzle_payload(pos_profile_doc.get("custom_pump_nozzles") or []),
             }
            
@@ -226,17 +197,8 @@ def create_opening_voucher(pos_profile, company, balance_details, nozzle_reading
 
     new_pos_opening.insert(ignore_permissions=True)
 
-    can_update_profile_nozzles = _has_field("POS Profile", "custom_pump_nozzles")
-    has_fuel_toggle = _has_field("POS Profile", "custom_enable_fuel_customization")
-    if can_update_profile_nozzles and has_fuel_toggle and parsed_nozzle_readings:
-        pos_profile_doc = frappe.get_doc("POS Profile", pos_profile)
-        if cint(pos_profile_doc.get("custom_enable_fuel_customization") or 0) == 1:
-            updated_nozzles = _prepare_profile_nozzle_rows(
-                pos_profile_doc.get("custom_pump_nozzles") or [],
-                parsed_nozzle_readings,
-            )
-            pos_profile_doc.set("custom_pump_nozzles", updated_nozzles)
-            pos_profile_doc.save(ignore_permissions=True)
+    # The POS Profile nozzle `current_reading` is only ever advanced by a shift
+    # close or by a Nozzle Meter Correction, never by what the till posted here.
 
     data = {}
     data["pos_opening_shift"] = new_pos_opening.as_dict()
