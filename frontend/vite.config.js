@@ -46,13 +46,6 @@ export default defineConfig({
 					dest: "offline",
 				},
 				{
-					src: "src/sw.js",
-					dest: "../www",
-					transform(contents) {
-						return contents.replace(/__BUILD_VERSION__/g, buildVersion);
-					},
-				},
-				{
 					src: "src/loader.js",
 					dest: ".",
 					transform(contents) {

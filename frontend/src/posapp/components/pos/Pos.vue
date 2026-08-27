@@ -135,6 +135,12 @@ export default {
 			this.eventBus.on("close_opening_dialog", () => {
 				this.dialog = false;
 			});
+			// A PIN login swaps the session user without reloading the page, so
+			// re-resolve the shift. Otherwise the new cashier's sales would carry
+			// the previous cashier's posa_pos_opening_shift.
+			this.eventBus.on("pos_user_changed", () => {
+				this.check_opening_entry();
+			});
 			this.eventBus.on("register_pos_data", (data) => {
 				this.pos_profile = data.pos_profile;
 				this.get_offers(this.pos_profile.name, this.pos_profile);
@@ -179,6 +185,7 @@ export default {
 	},
 	beforeUnmount() {
 		this.eventBus.off("close_opening_dialog");
+		this.eventBus.off("pos_user_changed");
 		this.eventBus.off("register_pos_data");
 		this.eventBus.off("register_pos_profile");
 		this.eventBus.off("LoadPosProfile");

@@ -167,6 +167,7 @@ const KEY_TABLE_MAP = {
 	pricing_rules_last_sync: "pricing_rules",
 	pricing_rules_stale_at: "pricing_rules",
 	cache_version: "settings",
+	cache_profile: "settings",
 	cache_ready: "settings",
 	stock_cache_ready: "settings",
 	manual_offline: "settings",

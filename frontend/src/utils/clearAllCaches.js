@@ -1,3 +1,5 @@
+import { PRESERVED_TERMINAL_KEYS } from "./terminal.js";
+
 const DEFAULT_INDEXED_DB_NAMES = ["posawesome_offline"];
 
 async function delay(ms) {
@@ -7,10 +9,16 @@ async function delay(ms) {
 export async function clearLocalStorage(keys = []) {
 	if (typeof localStorage === "undefined") return;
 	try {
+		// The terminal's branch binding must outlive every cache clear. Without
+		// this, "Clear Cache" un-binds the till and drops it back to the branch
+		// picker — which is precisely the stuck state this is meant to avoid.
+		const preserved = new Set(PRESERVED_TERMINAL_KEYS);
 		if (keys.length) {
-			keys.forEach((k) => localStorage.removeItem(k));
+			keys.filter((k) => !preserved.has(k)).forEach((k) => localStorage.removeItem(k));
 		} else {
-			Object.keys(localStorage).forEach((key) => localStorage.removeItem(key));
+			Object.keys(localStorage)
+				.filter((key) => !preserved.has(key))
+				.forEach((key) => localStorage.removeItem(key));
 		}
 		console.log("[ClearAllCaches] localStorage cleared", keys.length ? keys : "all");
 	} catch (e) {

@@ -1,3 +1,4 @@
+/* global frappe */
 import { ref, getCurrentInstance } from "vue";
 import {
 	initPromise,
@@ -6,29 +7,34 @@ import {
 	setOpeningStorage,
 	clearOpeningStorage,
 	setTaxTemplate,
+	ensureCacheProfile,
 } from "../../offline/index.js";
+import { refreshCsrfToken as syncCsrfToken } from "../../utils/session.js";
+import { getBoundProfileName } from "../../utils/terminal.js";
 
 /**
- * Sync frappe.csrf_token with the current server session.
- * After a PIN login, in-flight responses from the previous session may
- * set Set-Cookie: sid=<old>, reverting the browser cookie.  This fetch
- * ensures the CSRF token matches whatever session the cookie now holds.
+ * Decide whether a cached opening shift may be used.
+ *
+ * The cached shift is the previous user's, and on an offline or failed
+ * check_opening_shift it used to be re-registered unconditionally — which is
+ * how a till ended up selling under another branch's profile. Only honour it
+ * when it belongs to the branch this terminal is actually bound to.
  */
-async function syncCsrfToken() {
-	try {
-		const resp = await fetch(
-			"/api/method/posawesome.posawesome.api.pin_login.get_session_csrf",
-			{ method: "GET", credentials: "same-origin", cache: "no-store" },
+function cachedOpeningForThisTerminal() {
+	const data = getOpeningStorage();
+	if (!data?.pos_profile?.name) return null;
+
+	const bound = getBoundProfileName();
+	if (bound && data.pos_profile.name !== bound) {
+		console.warn(
+			"Ignoring cached opening shift for",
+			data.pos_profile.name,
+			"- this terminal is bound to",
+			bound,
 		);
-		if (resp.ok) {
-			const data = await resp.json();
-			if (data.message?.csrf_token) {
-				frappe.csrf_token = data.message.csrf_token;
-			}
-		}
-	} catch (e) {
-		console.warn("Failed to sync CSRF token", e);
+		return null;
 	}
+	return data;
 }
 
 export function usePosShift(openDialog) {
@@ -45,10 +51,19 @@ export function usePosShift(openDialog) {
 			.call("posawesome.posawesome.api.shifts.check_opening_shift", {
 				user: frappe.session.user,
 			})
-			.then((r) => {
+			.then(async (r) => {
 				if (r.message) {
 					pos_profile.value = r.message.pos_profile;
 					pos_opening_shift.value = r.message.pos_opening_shift;
+
+					// Backstop: almost no cache in this app is keyed by profile, so
+					// if the server hands us a different branch than the cached data
+					// belongs to, drop that data before anything reads it.
+					try {
+						await ensureCacheProfile(r.message.pos_profile?.name);
+					} catch (e) {
+						console.error("Failed to reconcile cache profile", e);
+					}
 
 					// If shift is from a previous day and daily close is enforced,
 					// force the user to close it before proceeding.
@@ -90,7 +105,7 @@ export function usePosShift(openDialog) {
 						console.error("Failed to cache opening data", e);
 					}
 				} else {
-					const data = getOpeningStorage();
+					const data = cachedOpeningForThisTerminal();
 					if (data) {
 						pos_profile.value = data.pos_profile;
 						pos_opening_shift.value = data.pos_opening_shift;
@@ -108,7 +123,7 @@ export function usePosShift(openDialog) {
 				}
 			})
 			.catch(() => {
-				const data = getOpeningStorage();
+				const data = cachedOpeningForThisTerminal();
 				if (data) {
 					pos_profile.value = data.pos_profile;
 					pos_opening_shift.value = data.pos_opening_shift;

@@ -65,6 +65,7 @@
 					@clear-cache="clearCache"
 					@show-about="showAboutDialog = true"
 					@toggle-theme="toggleTheme"
+					@lock-terminal="lockTerminal"
 					@logout="logOut"
 				/>
 			</template>
@@ -442,6 +443,13 @@ export default {
 		toggleTheme() {
 			this.$emit("toggle-theme");
 		},
+		lockTerminal() {
+			// Home.vue listens for this and re-shows the PIN screen. The listener
+			// has existed since the PIN screen was added; this is the button it
+			// always referred to but that was never built.
+			this.eventBus?.emit("lock_session");
+		},
+
 		logOut() {
 			this.$emit("logout");
 		},

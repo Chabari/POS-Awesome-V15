@@ -228,6 +228,22 @@
 					</div>
 				</v-list-item>
 
+				<v-list-item @click="$emit('lock-terminal')" class="menu-item-compact">
+					<template v-slot:prepend>
+						<div class="menu-icon-wrapper-compact">
+							<v-icon color="white" size="16">mdi-lock-outline</v-icon>
+						</div>
+					</template>
+					<div class="menu-content-compact">
+						<v-list-item-title class="menu-item-title-compact">{{
+							__("Lock Terminal")
+						}}</v-list-item-title>
+						<v-list-item-subtitle class="menu-item-subtitle-compact">{{
+							__("Hand over to the next cashier")
+						}}</v-list-item-subtitle>
+					</div>
+				</v-list-item>
+
 				<v-list-item @click="$emit('logout')" class="menu-item-compact danger-action">
 					<template v-slot:prepend>
 						<div class="menu-icon-wrapper-compact danger-icon">
@@ -586,6 +602,7 @@ export default {
 		"clear-cache",
 		"show-about",
 		"toggle-theme",
+		"lock-terminal",
 		"logout",
 		"refresh-cache-usage",
 	],

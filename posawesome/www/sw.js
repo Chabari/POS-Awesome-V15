@@ -91,6 +91,44 @@ async function enforceCacheLimit(cache) {
 	}
 }
 
+const APP_SHELL_URL = "/app/posapp";
+
+/**
+ * Strip session-bound values out of a cached HTML shell.
+ *
+ * /app/posapp is rendered by Frappe's desk.html, which embeds
+ * `frappe.csrf_token = "<token>"` and a full `frappe.boot` for whoever was
+ * logged in when the service worker installed.  Replaying that page later —
+ * which the navigation handler below does on any network blip — booted the app
+ * with a token from a long-dead session, so every write failed with
+ * "Invalid Request" until someone hard-refreshed.  It also carried the previous
+ * user's `frappe.boot.pos_profile`, which fed the wrong-branch problem.
+ *
+ * The token is blanked rather than left alone; the app detects the blank at
+ * boot and fetches a live one before it issues any write.
+ */
+async function neutraliseAppShell(response) {
+	try {
+		const html = await response.text();
+		const cleaned = html
+			.replace(/frappe\.csrf_token\s*=\s*(["'])(?:(?!\1).)*\1/g, 'frappe.csrf_token = ""')
+			.replace(/"pos_profile"\s*:\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '"pos_profile": null');
+
+		const headers = new Headers(response.headers);
+		headers.set("X-Posa-Shell", "cached");
+		headers.delete("content-length");
+
+		return new Response(cleaned, {
+			status: response.status,
+			statusText: response.statusText,
+			headers,
+		});
+	} catch (err) {
+		console.warn("SW failed to neutralise app shell", err);
+		return null;
+	}
+}
+
 self.addEventListener("install", (event) => {
 	self.skipWaiting();
 	event.waitUntil(
@@ -102,7 +140,14 @@ self.addEventListener("install", (event) => {
 					try {
 						const resp = await fetch(url);
 						if (resp && resp.ok) {
-							await cache.put(url, resp.clone());
+							if (url === APP_SHELL_URL) {
+								const safe = await neutraliseAppShell(resp.clone());
+								if (safe) {
+									await cache.put(url, safe);
+								}
+							} else {
+								await cache.put(url, resp.clone());
+							}
 						}
 					} catch (err) {
 						console.warn("SW install failed to fetch", url, err);

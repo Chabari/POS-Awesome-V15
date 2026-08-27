@@ -85,6 +85,10 @@ export const memory = {
 	customers_last_sync: null,
 	// Track the current cache schema version
 	cache_version: CACHE_VERSION,
+	// POS Profile the cached items/prices/stock were loaded for.  Compared
+	// against the terminal binding on boot so a branch switch can never leave
+	// the previous branch's data behind.
+	cache_profile: null,
 	cache_ready: false,
 	tax_inclusive: false,
 	manual_offline: false,
@@ -171,6 +175,134 @@ export function reduceCacheUsage() {
 	persist("stock_cache_ready", memory.stock_cache_ready);
 	persist("coupons_cache", memory.coupons_cache);
 	persist("item_groups_cache", memory.item_groups_cache);
+}
+
+/**
+ * Purge everything that belongs to one POS Profile, and nothing else.
+ *
+ * Almost no cache in this app is keyed by profile — `items`, `item_prices`,
+ * `local_stock_cache`, `item_groups_cache`, `offers_cache` and the pricing
+ * rules snapshot are all global to the browser origin — so switching branch
+ * without this would sell one branch's prices and stock under another's name.
+ *
+ * Deliberately NOT a call to forceClearAllCache(): that also empties
+ * offline_invoices / offline_payments / offline_customers, i.e. sales that
+ * have not reached the server yet.  Those queues carry their own pos_profile
+ * (see offline/sync.js) and sync to the correct branch on their own, so they
+ * are left untouched here.
+ *
+ * @param {string|null} nextProfile profile the cache will now belong to
+ */
+export async function clearProfileScopedCache(nextProfile = null) {
+	try {
+		await clearStoredItems();
+	} catch (e) {
+		console.error("Failed to clear stored items during profile switch", e);
+	}
+
+	try {
+		await clearPriceListCache();
+	} catch (e) {
+		console.error("Failed to clear price list cache during profile switch", e);
+	}
+
+	memory.item_details_cache = {};
+	memory.uom_cache = {};
+	memory.offers_cache = [];
+	memory.coupons_cache = {};
+	memory.customer_balance_cache = {};
+	memory.local_stock_cache = {};
+	memory.stock_cache_ready = false;
+	memory.item_groups_cache = [];
+	memory.sales_persons_storage = [];
+	memory.tax_template_cache = {};
+	memory.print_template = "";
+	memory.terms_and_conditions = "";
+	memory.tax_inclusive = false;
+	memory.items_last_sync = null;
+	memory.customers_last_sync = null;
+	memory.pos_opening_storage = null;
+	memory.opening_dialog_storage = null;
+	memory.pricing_rules_snapshot = [];
+	memory.pricing_rules_context = null;
+	memory.pricing_rules_last_sync = null;
+	memory.pricing_rules_stale_at = null;
+	memory.cache_profile = nextProfile || null;
+
+	[
+		"item_details_cache",
+		"uom_cache",
+		"offers_cache",
+		"coupons_cache",
+		"customer_balance_cache",
+		"local_stock_cache",
+		"stock_cache_ready",
+		"item_groups_cache",
+		"sales_persons_storage",
+		"tax_template_cache",
+		"print_template",
+		"terms_and_conditions",
+		"tax_inclusive",
+		"items_last_sync",
+		"customers_last_sync",
+		"pos_opening_storage",
+		"opening_dialog_storage",
+		"pricing_rules_snapshot",
+		"pricing_rules_context",
+		"pricing_rules_last_sync",
+		"pricing_rules_stale_at",
+		"cache_profile",
+	].forEach((key) => persist(key, memory[key]));
+
+	try {
+		await clearCustomerStorage();
+	} catch (e) {
+		console.error("Failed to clear customer storage during profile switch", e);
+	}
+
+	// itemsStore keeps its own in-memory Maps and posa_items_* sessionStorage
+	// entries; those are cleared by the caller (utils/profileSwitch.js).
+	if (typeof sessionStorage !== "undefined") {
+		try {
+			Object.keys(sessionStorage)
+				.filter((key) => key.startsWith("posa_items_"))
+				.forEach((key) => sessionStorage.removeItem(key));
+		} catch (e) {
+			console.warn("Failed to clear item session cache", e);
+		}
+	}
+}
+
+/** Record which POS Profile the current cache contents belong to. */
+export function setCacheProfile(profileName) {
+	memory.cache_profile = profileName || null;
+	persist("cache_profile", memory.cache_profile);
+}
+
+export function getCacheProfile() {
+	return memory.cache_profile || null;
+}
+
+/**
+ * Drop the cache if it belongs to a different branch than the one now active.
+ * Called on boot and whenever a profile is registered, so a stale cache can
+ * never survive into a new branch even if the switch path was bypassed.
+ *
+ * A missing stamp means "unknown", not "wrong" — we adopt it rather than
+ * throwing away a perfectly good cache on first upgrade.
+ */
+export async function ensureCacheProfile(profileName) {
+	if (!profileName) return false;
+	const stamped = memory.cache_profile;
+	if (!stamped) {
+		setCacheProfile(profileName);
+		return false;
+	}
+	if (stamped === profileName) return false;
+
+	console.info("POS Profile changed", stamped, "->", profileName, "- purging profile caches");
+	await clearProfileScopedCache(profileName);
+	return true;
 }
 
 function sanitiseSnapshot(snapshot = []) {
@@ -604,6 +736,7 @@ export async function clearAllCache() {
 	memory.print_template = "";
 	memory.terms_and_conditions = "";
 	memory.cache_version = CACHE_VERSION;
+	memory.cache_profile = null;
 	memory.tax_inclusive = false;
 	memory.manual_offline = false;
 	memory.cache_ready = false;
@@ -652,6 +785,7 @@ export async function forceClearAllCache() {
 	memory.print_template = "";
 	memory.terms_and_conditions = "";
 	memory.cache_version = CACHE_VERSION;
+	memory.cache_profile = null;
 	memory.tax_inclusive = false;
 	memory.manual_offline = false;
 	memory.cache_ready = false;

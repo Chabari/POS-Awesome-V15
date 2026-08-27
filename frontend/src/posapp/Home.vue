@@ -6,6 +6,7 @@
 			@auth-state-change="handlePinAuthStateChange"
 			@lock-state-change="handlePinLockStateChange"
 			@authenticated="handlePinAuthenticated"
+			@branch-changed="handleBranchChanged"
 		/>
 		<AppLoadingOverlay :visible="globalLoading" />
 		<UpdatePrompt />
@@ -57,6 +58,7 @@ import UpdatePrompt from "./components/ui/UpdatePrompt.vue";
 import PinLoginScreen from "./components/ui/PinLoginScreen.vue";
 import { useLoading } from "./composables/useLoading.js";
 import { usePosShift } from "./composables/usePosShift.js";
+import { getTerminalBinding } from "../utils/terminal.js";
 import { loadingState, initLoadingSources, setSourceProgress, markSourceLoaded } from "./utils/loading.js";
 import { useCustomersStore } from "./stores/customersStore.js";
 import { storeToRefs } from "pinia";
@@ -488,9 +490,38 @@ export default {
 		},
 
 		handleLogout() {
-			frappe.call("logout").finally(() => {
-				window.location.href = "/app";
+			// A PIN terminal stays a PIN terminal: send it back to its own lock
+			// screen rather than to /app, which a salesperson cannot navigate back
+			// from. The terminal binding deliberately survives — the branch belongs
+			// to the machine, not to whoever just left.
+			const isPinTerminal = !!getTerminalBinding()?.pin_login;
+			const method = isPinTerminal ? "posawesome.posawesome.api.pin_login.pin_logout" : "logout";
+
+			frappe.call(method).finally(() => {
+				window.location.href = isPinTerminal ? "/app/posapp" : "/app";
 			});
+		},
+
+		async handleBranchChanged(payload = {}) {
+			// The cache for the previous branch is already gone by the time this
+			// fires (utils/profileSwitch.js). Drop the in-memory profile too so
+			// nothing downstream keeps selling under the old one.
+			this.posProfile = {};
+			this.lastInvoiceId = null;
+			this.pendingInvoices = getPendingOfflineInvoiceCount();
+
+			// Drop any cart left over from the previous branch. get_invoice_doc()
+			// keeps an existing doc.pos_profile (invoiceItemMethods.js), so a cart
+			// built under Kilimani would otherwise submit against Kilimani from a
+			// terminal that is now Nairobi.
+			this.eventBus?.emit("clear_invoice");
+
+			if (payload.pendingCarriedOver) {
+				this.eventBus?.emit("show_message", {
+					title: `${payload.pendingCarriedOver} sale(s) from ${payload.from} are still waiting to upload.`,
+					color: "warning",
+				});
+			}
 		},
 
 		handleRefreshCacheUsage() {
@@ -557,6 +588,8 @@ export default {
 					frappe.boot.user.name = data.user;
 				}
 			}
+			// Re-resolve the opening shift for whoever just signed in.
+			this.eventBus?.emit("pos_user_changed", { user: data.user });
 		},
 
 		handleUpdateAfterDelete() {

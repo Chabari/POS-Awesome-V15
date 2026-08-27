@@ -14,8 +14,19 @@ import * as components from "vuetify/components";
 import * as directives from "vuetify/directives";
 import Home from "./Home.vue";
 import { attachProfilerHelpers, initLongTaskObserver, isPerfEnabled } from "./utils/perf.js";
+import { installSessionGate, ensureFreshCsrf } from "../utils/session.js";
 
 attachProfilerHelpers();
+
+// Install before anything can issue a request. The gate makes every frappe.call
+// repair a stale CSRF token instead of surfacing "Invalid Request", and lets a
+// PIN login quiesce the app while it switches sessions.
+installSessionGate();
+
+// The page may have been served from the service worker's cached app shell,
+// whose csrf_token is deliberately blanked (posawesome/www/sw.js). Fetch a live
+// one before the app starts writing.
+ensureFreshCsrf();
 
 // Expose Dexie globally for libraries that expect a global Dexie instance
 if (typeof window !== "undefined" && !window.Dexie) {
