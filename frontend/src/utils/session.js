@@ -189,9 +189,11 @@ async function waitForQuiescence(timeoutMs = 4000) {
 let originalCall = null;
 
 /**
- * Install the gate.  While open this is a straight pass-through — callers get
- * back the original jQuery promise with its .always()/.abort() intact.  Only
- * while the gate is closed do requests queue and resolve as plain Promises.
+ * Install the gate.  While open, a request goes straight out and comes back as
+ * the CSRF-heal chain with the jqXHR control surface (.abort(), .status, ...)
+ * re-exposed on top of it — Frappe core cancels in-flight calls through
+ * .abort(), so that surface has to survive the wrapping.  Only while the gate
+ * is closed do requests queue instead of being sent.
  */
 export function installSessionGate() {
 	if (typeof frappe === "undefined" || originalCall) return;
@@ -201,9 +203,21 @@ export function installSessionGate() {
 		if (!gateClosed) {
 			return withCsrfHeal(this, callArgs);
 		}
-		return new Promise((resolve, reject) => {
-			queued.push({ ctx: this, callArgs, resolve, reject });
+		// No XHR exists yet, so there is nothing to adopt an .abort() from — but
+		// callers still expect one (query_report.js aborts the previous run before
+		// starting the next). Cancelling here just drops the entry from the queue.
+		let entry;
+		const pending = new Promise((resolve, reject) => {
+			entry = { ctx: this, callArgs, resolve, reject };
+			queued.push(entry);
 		});
+		pending.abort = () => {
+			const i = queued.indexOf(entry);
+			if (i !== -1) queued.splice(i, 1);
+			entry.reject({ statusText: "abort", readyState: 0 });
+			return pending;
+		};
+		return pending;
 	};
 
 	const resync = () => {
@@ -225,6 +239,38 @@ export function installSessionGate() {
 	}
 }
 
+// jQuery 3's .then()/.catch() hand back a FRESH Deferred promise: it carries
+// done/fail/always but none of the jqXHR control surface. Frappe cancels the
+// previous in-flight request with `this.last_ajax.abort()` (see
+// frappe/public/js/frappe/views/reports/query_report.js), so a healed promise
+// without .abort() leaves every report stuck on its loading screen.
+const XHR_METHODS = [
+	"abort",
+	"getResponseHeader",
+	"getAllResponseHeaders",
+	"setRequestHeader",
+	"overrideMimeType",
+	"statusCode",
+];
+const XHR_PROPS = ["readyState", "status", "statusText", "responseText", "responseJSON"];
+
+function adoptXhrSurface(target, xhr) {
+	for (const name of XHR_METHODS) {
+		if (typeof xhr[name] !== "function") continue;
+		target[name] = (...args) => {
+			const out = xhr[name](...args);
+			// jqXHR returns itself for chaining; keep the chain on the wrapper.
+			return out === xhr ? target : out;
+		};
+	}
+	for (const name of XHR_PROPS) {
+		if (!(name in xhr)) continue;
+		// Live getters — these mutate as the request progresses.
+		Object.defineProperty(target, name, { configurable: true, get: () => xhr[name] });
+	}
+	return target;
+}
+
 /**
  * Delegate to the real frappe.call, and on a CSRF failure repair the token.
  *
@@ -237,7 +283,7 @@ function withCsrfHeal(ctx, callArgs) {
 	const result = originalCall.apply(ctx, callArgs);
 	if (!result || typeof result.then !== "function") return result;
 
-	return result.catch(async (err) => {
+	const healed = result.catch(async (err) => {
 		if (!isInvalidRequestError(err)) throw err;
 
 		await refreshCsrfToken();
@@ -249,6 +295,9 @@ function withCsrfHeal(ctx, callArgs) {
 		}
 		return originalCall.apply(ctx, callArgs);
 	});
+
+	if (typeof result.abort === "function") adoptXhrSurface(healed, result);
+	return healed;
 }
 
 /**

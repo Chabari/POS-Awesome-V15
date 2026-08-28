@@ -7,6 +7,12 @@ frappe.ui.form.on("POS Closing Shift", {
 });
 
 function render_fuel_nozzle_charts(frm) {
+	// The nozzle fields come from the fuel customization app; without it,
+	// querying them server-side raises "Unknown column".
+	if (!frappe.meta.has_field(frm.doctype, "custom_nozzle_readings")) {
+		return;
+	}
+
 	const rows = (frm.doc.custom_nozzle_readings || []).filter(
 		(r) => r.nozzle || r.fuel_item,
 	);

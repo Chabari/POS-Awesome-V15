@@ -33,6 +33,7 @@ from posawesome.posawesome.api.utilities import (
     ensure_child_doctype,
     set_batch_nos_for_bundels,
 )  # Updated imports
+from posawesome.utils import has_field
 
 from .items import get_bulk_stock_availability, get_stock_availability
 
@@ -513,6 +514,11 @@ def _auto_set_return_batches(invoice_doc):
 
 def _mode_requires_payment_reference(mode_of_payment):
     if not mode_of_payment:
+        return False
+
+    # Optional custom field: selecting it when the field was never created
+    # raises "Unknown column".
+    if not has_field("Mode of Payment", "custom_enforce_payment_reference"):
         return False
 
     return bool(
@@ -1685,7 +1691,7 @@ def fetch_exchange_rate_pair(from_currency: str, to_currency: str, posting_date:
 
 
 @frappe.whitelist()
-def get_price_list_currency(price_list: str) -> str:
+def get_price_list_currency(price_list: str | None = None) -> str | None:
     """Return the currency of the given Price List."""
     if not price_list:
         return None

@@ -1007,15 +1007,23 @@ export default {
 					}
 				} catch (error) {
 					console.error("Failed fetching price lists", error);
-					this.price_lists = [this.pos_profile.selling_price_list];
+					this.price_lists = [this.pos_profile.selling_price_list].filter(Boolean);
 				}
 			} else {
 				// Fallback to the price list defined in the POS Profile
-				this.price_lists = [this.pos_profile.selling_price_list];
+				this.price_lists = [this.pos_profile.selling_price_list].filter(Boolean);
 			}
 
 			if (!this.selected_price_list) {
 				this.selected_price_list = this.pos_profile.selling_price_list;
+			}
+
+			// No price list configured on the POS Profile: skip the lookup and
+			// fall back to the profile currency instead of calling the server
+			// with an empty argument.
+			if (!this.selected_price_list) {
+				this.price_list_currency = this.pos_profile.currency || "";
+				return this.price_lists;
 			}
 
 			// Fetch and store currency for the applied price list

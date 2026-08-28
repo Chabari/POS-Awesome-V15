@@ -88,3 +88,34 @@ def get_build_version() -> str:
     if _FALLBACK_VERSION is None:
         _FALLBACK_VERSION = f"{app_version}-{int(time.time())}"
     return _FALLBACK_VERSION
+
+
+def has_field(doctype: str, fieldname: str) -> bool:
+    """Return True when `doctype` really has `fieldname`.
+
+    Optional custom fields are contributed by apps that may not be installed on
+    a given site. Reading one that does not exist raises
+    ``OperationalError (1054, "Unknown column ...")``, so every SQL read of such
+    a field has to be guarded with this first. The DB column is checked as well
+    as the meta, to also cover a Custom Field record whose migrate has not run.
+    """
+
+    import frappe
+    from frappe.model import no_value_fields, table_fields
+
+    try:
+        df = frappe.get_meta(doctype).get_field(fieldname)
+    except Exception:
+        return False
+
+    if not df:
+        return False
+
+    if df.fieldtype in table_fields or df.fieldtype in no_value_fields:
+        # Child tables and layout fields have no column of their own.
+        return True
+
+    try:
+        return bool(frappe.db.has_column(doctype, fieldname))
+    except Exception:
+        return False

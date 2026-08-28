@@ -16,6 +16,7 @@ from posawesome.posawesome.doctype.pos_cash_draw.pos_cash_draw import (
     get_cash_draw_totals,
     get_unposted_cash_draws,
 )
+from posawesome.utils import has_field
 
 
 def get_base_value(doc, fieldname, base_fieldname=None, conversion_rate=None):
@@ -782,6 +783,12 @@ class POSClosingShift(Document):
         If `posa_allow_delete` is also enabled, draft invoices for this shift
         are deleted first so they do not block closing.
         """
+        # The flag is an optional custom field: when the app that adds it is not
+        # installed, selecting it raises "Unknown column", and its absence
+        # already means "do not block closing".
+        if not has_field("POS Profile", "custom_disable_shift_closing_unpaid_invoices"):
+            return
+
         profile = frappe.db.get_value(
             "POS Profile",
             self.pos_profile,
@@ -2006,10 +2013,16 @@ def make_closing_shift_from_opening(opening_shift):
     cash_draws = get_unposted_cash_draws(closing_shift.pos_opening_shift)
     _apply_cash_draw_reconciliation(closing_shift, cash_draws)
 
+    # Check the fields exist before the value is read: they belong to the fuel
+    # customization app, which may not be installed on this site, and a SELECT
+    # on a missing column raises "Unknown column".
     if (
-        cint(frappe.db.get_value("POS Profile", closing_shift.pos_profile, "custom_enable_fuel_customization") or 0)
+        has_field("POS Profile", "custom_enable_fuel_customization")
+        and has_field("POS Opening Shift", "custom_nozzle_readings")
+        and cint(
+            frappe.db.get_value("POS Profile", closing_shift.pos_profile, "custom_enable_fuel_customization") or 0
+        )
         == 1
-        and frappe.get_meta("POS Opening Shift").has_field("custom_nozzle_readings")
     ):
         sold_by_item_warehouse = _get_shift_sold_by_item(opening_shift_doc.name, closing_shift.pos_profile)
         sold_by_item = _aggregate_by_item(sold_by_item_warehouse)
@@ -2050,7 +2063,8 @@ def make_closing_shift_from_opening(opening_shift):
             )
 
         # Use set() so frappe converts row dicts to child documents.
-        closing_shift.set("custom_nozzle_readings", nozzle_rows)
+        if has_field("POS Closing Shift", "custom_nozzle_readings"):
+            closing_shift.set("custom_nozzle_readings", nozzle_rows)
 
     response = closing_shift.as_dict()
     response["custom_nozzle_reading_meta"] = nozzle_row_meta if 'nozzle_row_meta' in locals() else []
@@ -2092,7 +2106,10 @@ def submit_closing_shift(closing_shift):
         frappe.throw(_("Cash draws changed while the closing dialog was open. Reopen it and review the totals."))
 
     can_apply_fuel_reconciliation = (
-        cint(
+        has_field("POS Profile", "custom_enable_fuel_customization")
+        and has_field("POS Opening Shift", "custom_nozzle_readings")
+        and has_field("POS Profile", "custom_pump_nozzles")
+        and cint(
             frappe.db.get_value(
                 "POS Profile",
                 closing_shift_doc.pos_profile,
@@ -2101,8 +2118,6 @@ def submit_closing_shift(closing_shift):
             or 0
         )
         == 1
-        and frappe.get_meta("POS Opening Shift").has_field("custom_nozzle_readings")
-        and frappe.get_meta("POS Profile").has_field("custom_pump_nozzles")
     )
 
     _apply_cash_draw_reconciliation(

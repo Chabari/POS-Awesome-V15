@@ -483,7 +483,7 @@
 				</v-row>
 
 				<!-- Customer Purchase Order (if enabled in POS profile) -->
-				<div v-if="pos_profile.posa_allow_customer_purchase_order">
+				<div v-if="invoice_doc && pos_profile.posa_allow_customer_purchase_order">
 					<v-divider></v-divider>
 					<v-row class="pa-1" justify="center" align="start">
 						<v-col cols="6">
@@ -2851,11 +2851,21 @@ export default {
 		},
 		// Update purchase order date after selection
 		update_po_date() {
-			this.invoice_doc.po_date = this.formatDate(this.new_po_date);
+			const formatted = this.formatDate(this.new_po_date);
+			if (this.invoice_doc) {
+				this.invoice_doc.po_date = formatted;
+			} else {
+				this.invoiceStore.mergeInvoiceDoc({ po_date: formatted });
+			}
 		},
 		// Update credit due date after selection
 		update_credit_due_date() {
-			this.invoice_doc.due_date = this.formatDate(this.new_credit_due_date);
+			const formatted = this.formatDate(this.new_credit_due_date);
+			if (this.invoice_doc) {
+				this.invoice_doc.due_date = formatted;
+			} else {
+				this.invoiceStore.mergeInvoiceDoc({ due_date: formatted });
+			}
 		},
 		// Apply preset or typed number of days to set due date
 		applyDuePreset(days) {

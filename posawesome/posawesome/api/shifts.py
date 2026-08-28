@@ -7,14 +7,13 @@ import json
 import frappe
 from frappe.utils import cint, nowdate, getdate, get_datetime
 from frappe import _
+from posawesome.utils import has_field
+
 from .utilities import get_version
 
 
 def _has_field(doctype, fieldname):
-    try:
-        return frappe.get_meta(doctype).has_field(fieldname)
-    except Exception:
-        return False
+    return has_field(doctype, fieldname)
 
 
 def _to_dict(value):
