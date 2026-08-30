@@ -12,6 +12,8 @@ from frappe.query_builder.functions import Sum
 from frappe.utils import flt, nowdate
 from frappe.utils.caching import redis_cache
 
+from .utils import get_additional_price_lists
+
 
 def _resolve_cache_ttl(ttl: Optional[int]) -> int:
     """Return a numeric TTL value while falling back to the default window."""
@@ -57,11 +59,21 @@ def _fetch_item_prices(
     item_codes: Tuple[str, ...],
     customer: str,
     today: str,
+    price_field: str = "selling",
 ):
-    """Return raw Item Price rows honoring date, currency and customer filters."""
+    """Return raw Item Price rows honoring date, currency and customer filters.
+
+    ``price_field`` selects whether ``Item Price.selling`` or
+    ``Item Price.buying`` rows are matched, so the same helper can look up
+    both the POS Profile's default selling price list and any additional
+    (e.g. buying/wholesale) price lists configured for display.
+    """
 
     if not item_codes:
         return []
+
+    if price_field not in ("selling", "buying"):
+        price_field = "selling"
 
     params = {
         "price_list": price_list,
@@ -91,13 +103,13 @@ def _fetch_item_prices(
                 price_list = %(price_list)s
                 AND item_code IN %(item_codes)s
                 AND currency = %(currency)s
-                AND selling = 1
+                AND {price_field} = 1
                 AND (valid_from IS NULL OR valid_from <= %(today)s)
                 AND IFNULL(customer, '') IN ('', %(customer)s)
                 AND (valid_upto IS NULL OR valid_upto = '' OR valid_upto >= %(today)s)
         ) ip
         ORDER BY IFNULL(customer, '') ASC, valid_from ASC, valid_upto DESC
-    """
+    """.format(price_field=price_field)
 
     return frappe.db.sql(query, params, as_dict=True)
 
@@ -109,11 +121,12 @@ def get_item_prices(
     customer: Optional[str],
     today: Optional[str] = None,
     ttl: Optional[int] = None,
+    price_field: str = "selling",
 ):
     """Fetch Item Price data with optional redis caching based on TTL."""
 
     cached = _cache_wrapper(_price_cache, ttl, _fetch_item_prices)
-    return cached(price_list, currency, tuple(item_codes), customer or "", today or nowdate())
+    return cached(price_list, currency, tuple(item_codes), customer or "", today or nowdate(), price_field)
 
 
 def _fetch_bin_qty(warehouse: str, item_codes: Tuple[str, ...]):
@@ -362,6 +375,7 @@ class ItemLookupData:
     barcode_map: Dict[str, List[Dict[str, Any]]]
     batch_map: Dict[str, List[Dict[str, Any]]]
     serial_map: Dict[str, List[Dict[str, Any]]]
+    extra_price_maps: Dict[str, Dict[str, Dict[str, frappe._dict]]] = None
 
 
 def _select_price(
@@ -401,6 +415,7 @@ def merge_item_row(
     lookup_data: ItemLookupData,
     price_list_currency: Optional[str],
     exchange_rate: float,
+    extra_price_lists: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Merge lookup data into a POS item row for downstream consumption."""
 
@@ -434,6 +449,20 @@ def merge_item_row(
             "conversion_rate": exchange_rate,
         }
     )
+
+    if extra_price_lists:
+        extra_price_maps = lookup_data.extra_price_maps or {}
+        extra_prices: Dict[str, Dict[str, Any]] = {}
+        for cfg in extra_price_lists:
+            price_rows = extra_price_maps.get(cfg["key"], {}).get(item_code, {})
+            extra_price_row = _select_price(price_rows, item.get("uom"), meta.get("stock_uom"))
+            extra_prices[cfg["key"]] = {
+                "rate": extra_price_row.get("price_list_rate") if extra_price_row else 0,
+                "currency": (extra_price_row.get("currency") if extra_price_row else None)
+                or cfg.get("currency"),
+            }
+        row["posa_extra_prices"] = extra_prices
+
     if not row.get("item_name") and meta.get("item_name"):
         row["item_name"] = meta.get("item_name")
     return row
@@ -456,6 +485,7 @@ class ItemDetailAggregator:
         self.warehouse = pos_profile.get("warehouse")
         self.price_list_currency = self._determine_price_list_currency()
         self.exchange_rate = self._compute_exchange_rate()
+        self.extra_price_lists = get_additional_price_lists(pos_profile)
 
     def _resolve_ttl(self) -> Optional[int]:
         """Convert the POS profile cache duration to seconds.
@@ -512,7 +542,7 @@ class ItemDetailAggregator:
 
         item_codes_tuple = _normalize_codes(item_codes)
         if not item_codes_tuple:
-            return ItemLookupData({}, {}, {}, {}, {}, {}, {})
+            return ItemLookupData({}, {}, {}, {}, {}, {}, {}, {})
 
         price_rows = []
         if self.price_list:
@@ -573,6 +603,23 @@ class ItemDetailAggregator:
                 {"serial_no": row.serial_no, "batch_no": row.batch_no}
             )
 
+        extra_price_maps: Dict[str, Dict[str, Dict[str, frappe._dict]]] = {}
+        for cfg in self.extra_price_lists:
+            price_field = "buying" if cfg["is_buying"] else "selling"
+            extra_rows = get_item_prices(
+                cfg["price_list"],
+                cfg.get("currency") or self.pos_profile.get("currency"),
+                item_codes_tuple,
+                self.customer,
+                today=self.today,
+                ttl=self.cache_ttl,
+                price_field=price_field,
+            )
+            pmap: Dict[str, Dict[str, frappe._dict]] = {}
+            for row in extra_rows:
+                pmap.setdefault(row.item_code, {})[row.get("uom") or "None"] = row
+            extra_price_maps[cfg["key"]] = pmap
+
         return ItemLookupData(
             price_map=price_map,
             stock_map=stock_map,
@@ -581,6 +628,7 @@ class ItemDetailAggregator:
             barcode_map=barcode_map,
             batch_map=batch_map,
             serial_map=serial_map,
+            extra_price_maps=extra_price_maps,
         )
 
     def build_details(self, items_data: Sequence[Dict[str, object]]) -> List[Dict[str, object]]:
@@ -603,6 +651,7 @@ class ItemDetailAggregator:
                     lookup_data,
                     self.price_list_currency or self.pos_profile.get("currency"),
                     self.exchange_rate,
+                    self.extra_price_lists,
                 )
             )
         return result

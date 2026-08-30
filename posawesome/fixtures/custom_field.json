@@ -8130,5 +8130,17 @@
   "translatable": 1,
   "unique": 0,
   "width": null
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "POS Profile",
+  "fieldname": "posa_additional_price_lists",
+  "fieldtype": "Table",
+  "insert_after": "selling_price_list",
+  "label": "Additional Price Lists",
+  "description": "Extra price lists to show as additional columns in the POS item list (e.g. wholesale or buying price). The Price List already used as the default POS Profile price list cannot be added here.",
+  "options": "POS Price List Row",
+  "module": "POSAwesome",
+  "name": "POS Profile-posa_additional_price_lists"
  }
 ]

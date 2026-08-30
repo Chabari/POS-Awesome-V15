@@ -9,6 +9,23 @@ frappe.ui.form.on("POS Profile", {
 			};
 		});
 
+		// Prevent selecting the POS Profile's own default price list (or a
+		// price list already added) as an additional price list column.
+		frm.set_query("price_list", "posa_additional_price_lists", function (doc) {
+			const already_selected = (doc.posa_additional_price_lists || [])
+				.map((row) => row.price_list)
+				.filter(Boolean);
+			const excluded = doc.selling_price_list
+				? [doc.selling_price_list, ...already_selected]
+				: already_selected;
+			if (!excluded.length) {
+				return {};
+			}
+			return {
+				filters: [["Price List", "name", "not in", excluded]],
+			};
+		});
+
 		frappe.call({
 			method: "posawesome.posawesome.api.utilities.get_language_options",
 			callback: function (r) {

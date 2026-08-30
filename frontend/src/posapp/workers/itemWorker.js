@@ -281,6 +281,7 @@ self.onmessage = async (event) => {
 				rate: it.rate,
 				price_list_rate: it.price_list_rate,
 				currency: it.currency,
+				posa_extra_prices: it.posa_extra_prices,
 				item_barcode: it.item_barcode,
 				item_uoms: it.item_uoms,
 				actual_qty: it.actual_qty,

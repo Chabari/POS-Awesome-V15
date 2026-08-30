@@ -139,3 +139,53 @@ def get_item_groups(pos_profile: str) -> list[str]:
     )
 
     return expand_item_groups(groups)
+
+
+def get_additional_price_lists(pos_profile: dict) -> list[dict]:
+    """Normalize the POS Profile's configured extra price list columns.
+
+    ``pos_profile`` is the plain dict representation of a POS Profile (as
+    produced by ``doc.as_dict()``). Its ``posa_additional_price_lists`` child
+    table lets a shop show extra columns in the POS item list -- e.g. a
+    wholesale or buying price alongside the profile's default
+    ``selling_price_list``. Rows referencing the default price list, blank
+    rows or duplicate price lists are dropped defensively (the POS Profile
+    ``validate`` hook already rejects these when saving the profile).
+
+    Returns a list of dicts: ``price_list``, ``alias`` (falls back to the
+    price list name), ``key`` (a scrubbed, JS/JSON-safe identifier used as
+    the dict key on each item row) and ``is_buying``/``currency`` metadata
+    used to decide how to look up the Item Price.
+    """
+
+    rows = pos_profile.get("posa_additional_price_lists") or []
+    if not rows:
+        return []
+
+    default_price_list = pos_profile.get("selling_price_list")
+    seen = set()
+    result = []
+    for row in rows:
+        price_list = row.get("price_list") if isinstance(row, dict) else getattr(row, "price_list", None)
+        if not price_list or price_list == default_price_list or price_list in seen:
+            continue
+        seen.add(price_list)
+
+        alias = row.get("alias") if isinstance(row, dict) else getattr(row, "alias", None)
+        alias = (alias or "").strip() or price_list
+
+        pl_meta = frappe.get_cached_value("Price List", price_list, ["buying", "currency"], as_dict=True)
+        is_buying = bool(pl_meta.get("buying")) if pl_meta else False
+        currency = (pl_meta.get("currency") if pl_meta else None) or pos_profile.get("currency")
+
+        result.append(
+            {
+                "price_list": price_list,
+                "alias": alias,
+                "key": frappe.scrub(price_list),
+                "is_buying": is_buying,
+                "currency": currency,
+            }
+        )
+
+    return result

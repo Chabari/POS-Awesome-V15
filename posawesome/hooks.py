@@ -116,6 +116,9 @@ doc_events = {
         "validate": "posawesome.posawesome.api.customer.validate",
         "after_insert": "posawesome.posawesome.api.customer.after_insert",
     },
+    "POS Profile": {
+        "validate": "posawesome.posawesome.api.pos_profile.validate",
+    },
 }
 
 # Scheduled Tasks
@@ -301,6 +304,7 @@ fixtures = [
                     "POS Profile-posa_enable_camera_scanning",
                     "POS Profile-posa_camera_scan_type",
                     "POS Profile-posa_language",
+                    "POS Profile-posa_additional_price_lists",
                     "POS Profile-posa_enable_return_validity",
                     "POS Profile-posa_return_validity_days",
                     "POS Settings-posa_enable_return_validity",

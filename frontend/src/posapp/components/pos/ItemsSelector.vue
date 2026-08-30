@@ -546,6 +546,22 @@
 										</div>
 									</div>
 								</template>
+								<template
+									v-for="col in extraPriceListColumns"
+									:key="col.key"
+									v-slot:[`item.${col.key}`]="{ item }"
+								>
+									<span class="text-medium-emphasis">
+										{{ currencySymbol(getExtraPriceCurrency(item, col.key)) }}
+										{{
+											memoizedFormatCurrency(
+												getExtraPriceRate(item, col.key),
+												getExtraPriceCurrency(item, col.key),
+												ratePrecision(getExtraPriceRate(item, col.key)),
+											)
+										}}
+									</span>
+								</template>
 							</v-data-table-virtual>
 						</div>
 					</v-col>
@@ -675,6 +691,15 @@ import placeholderImage from "./placeholder-image.png";
 import Skeleton from "../ui/Skeleton.vue";
 import { useCustomersStore } from "../../stores/customersStore.js";
 import { storeToRefs } from "pinia";
+
+// Mirrors frappe.scrub() (frappe/__init__.py) so extra price list column keys
+// match the identifiers the server attaches to each item's posa_extra_prices.
+function scrubPriceListKey(name) {
+	return String(name || "")
+		.replaceAll(" ", "_")
+		.replaceAll("-", "_")
+		.toLowerCase();
+}
 
 export default {
 	mixins: [format],
@@ -1568,6 +1593,9 @@ export default {
 						if (det.currency) {
 							upd.currency = det.currency;
 						}
+						if (det.posa_extra_prices) {
+							upd.posa_extra_prices = det.posa_extra_prices;
+						}
 						updates.push({ item, upd });
 					}
 				});
@@ -1610,6 +1638,9 @@ export default {
 						}
 						if (updItem.serial_no_data) {
 							upd.serial_no_data = updItem.serial_no_data;
+						}
+						if (updItem.posa_extra_prices) {
+							upd.posa_extra_prices = updItem.posa_extra_prices;
 						}
 						updates.push({ item, upd });
 					}
@@ -2055,7 +2086,25 @@ export default {
 				}
 			}
 
+			if (this.extraPriceListColumns.length) {
+				const rateIndex = items_headers.findIndex((h) => h.key === "rate");
+				const insertAt = rateIndex !== -1 ? rateIndex + 1 : items_headers.length;
+				const extraHeaders = this.extraPriceListColumns.map((col) => ({
+					title: col.alias,
+					key: col.key,
+					align: "start",
+					sortable: false,
+				}));
+				items_headers.splice(insertAt, 0, ...extraHeaders);
+			}
+
 			return items_headers;
+		},
+		getExtraPriceRate(item, key) {
+			return item?.posa_extra_prices?.[key]?.rate || 0;
+		},
+		getExtraPriceCurrency(item, key) {
+			return item?.posa_extra_prices?.[key]?.currency || this.pos_profile.currency;
 		},
 		select_item(event, item) {
 			const targets = document.querySelectorAll(".items-table-container");
@@ -2751,6 +2800,9 @@ export default {
 					if (det.currency) {
 						item.currency = det.currency;
 					}
+					if (det.posa_extra_prices) {
+						item.posa_extra_prices = det.posa_extra_prices;
+					}
 
 					vm.captureBaseAvailability(item, det.actual_qty);
 					if (det.actual_qty !== undefined && det.actual_qty !== null) {
@@ -2844,6 +2896,7 @@ export default {
 											? updated_item.price_list_rate
 											: item.price_list_rate,
 									currency: updated_item.currency || item.currency,
+									posa_extra_prices: updated_item.posa_extra_prices || item.posa_extra_prices,
 								},
 							});
 
@@ -4600,6 +4653,28 @@ export default {
 				return false;
 			}
 			return parseBooleanSetting(this.pos_profile?.posa_block_sale_beyond_available_qty);
+		},
+		extraPriceListColumns() {
+			const rows = this.pos_profile?.posa_additional_price_lists;
+			if (!Array.isArray(rows) || !rows.length) {
+				return [];
+			}
+			const defaultPriceList = this.pos_profile.selling_price_list;
+			const seen = new Set();
+			const columns = [];
+			rows.forEach((row) => {
+				const priceList = row?.price_list;
+				if (!priceList || priceList === defaultPriceList || seen.has(priceList)) {
+					return;
+				}
+				seen.add(priceList);
+				columns.push({
+					price_list: priceList,
+					key: scrubPriceListKey(priceList),
+					alias: (row.alias || "").trim() || priceList,
+				});
+			});
+			return columns;
 		},
 		headers() {
 			return this.getItemsHeaders();
