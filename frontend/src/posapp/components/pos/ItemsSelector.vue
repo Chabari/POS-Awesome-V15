@@ -2088,7 +2088,7 @@ export default {
 
 			if (this.extraPriceListColumns.length) {
 				const rateIndex = items_headers.findIndex((h) => h.key === "rate");
-				const insertAt = rateIndex !== -1 ? rateIndex + 1 : items_headers.length;
+				const insertAt = rateIndex !== -1 ? rateIndex : items_headers.length;
 				const extraHeaders = this.extraPriceListColumns.map((col) => ({
 					title: col.alias,
 					key: col.key,
