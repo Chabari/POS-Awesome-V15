@@ -120,34 +120,35 @@
 						</v-col>
 						<v-col cols="12" class="dynamic-margin-xs">
 							<div class="settings-container">
-								<v-btn
-									density="compact"
-									variant="text"
-									color="primary"
-									prepend-icon="mdi-cog-outline"
-									@click="toggleItemSettings"
-									class="settings-btn"
-								>
-									{{ __("Settings") }}
-								</v-btn>
-								<v-spacer></v-spacer>
+								<div class="settings-actions">
+									<v-btn
+										density="compact"
+										variant="text"
+										color="primary"
+										prepend-icon="mdi-cog-outline"
+										@click="toggleItemSettings"
+										class="settings-btn"
+									>
+										{{ __("Settings") }}
+									</v-btn>
+									<v-btn
+										density="compact"
+										variant="text"
+										color="primary"
+										prepend-icon="mdi-refresh"
+										@click="forceReloadItems"
+										class="settings-btn"
+									>
+										{{ __("Reload Items") }}
+									</v-btn>
+								</div>
 								<span
 									v-if="enable_background_sync"
 									class="text-caption text-medium-emphasis last-sync-label"
+									:title="`${__('Last sync:')} ${formatBackgroundSyncTime()}`"
 								>
 									{{ __("Last sync:") }} {{ formatBackgroundSyncTime() }}
 								</span>
-								<v-spacer></v-spacer>
-								<v-btn
-									density="compact"
-									variant="text"
-									color="primary"
-									prepend-icon="mdi-refresh"
-									@click="forceReloadItems"
-									class="settings-btn"
-								>
-									{{ __("Reload Items") }}
-								</v-btn>
 
 								<v-dialog v-model="show_item_settings" max-width="400px">
 									<v-card>
@@ -5263,10 +5264,6 @@ export default {
 	color: #4caf50 !important;
 }
 
-.last-sync-label {
-	white-space: nowrap;
-}
-
 /* Enhanced Arabic number support for ItemsSelector */
 .text-primary,
 .text-success,
@@ -5824,7 +5821,31 @@ export default {
 
 .settings-container {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
+	justify-content: space-between;
+	column-gap: 12px;
+	row-gap: 2px;
+}
+
+.settings-actions {
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+.settings-btn {
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+.last-sync-label {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+	margin-inline-start: auto;
 }
 
 .truncate {
