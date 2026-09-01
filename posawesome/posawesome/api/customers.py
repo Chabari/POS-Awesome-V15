@@ -54,6 +54,32 @@ def get_customer_group_condition(pos_profile):
     return cond
 
 
+def _attach_customer_group_price_lists(customers):
+    """Set ``customer_group_price_list`` on each row from its Customer Group.
+
+    Resolved with a single query over the (small) Customer Group doctype rather
+    than a per-customer lookup, since this runs over the full customer list that
+    gets pushed to the offline cache.
+    """
+
+    group_names = {c.get("customer_group") for c in customers if c.get("customer_group")}
+    group_price_lists = {}
+    if group_names:
+        group_price_lists = {
+            g.name: g.default_price_list
+            for g in frappe.get_all(
+                "Customer Group",
+                filters={"name": ["in", list(group_names)]},
+                fields=["name", "default_price_list"],
+            )
+        }
+
+    for customer in customers:
+        customer["customer_group_price_list"] = group_price_lists.get(customer.get("customer_group"))
+
+    return customers
+
+
 @frappe.whitelist()
 def get_customer_names(pos_profile, limit=None, offset=None, start_after=None, modified_after=None):
     _pos_profile = json.loads(pos_profile)
@@ -93,11 +119,18 @@ def get_customer_names(pos_profile, limit=None, offset=None, start_after=None, m
                 "tax_id",
                 "customer_name",
                 "primary_address",
+                "customer_group",
+                "default_price_list as customer_price_list",
             ],
             order_by="name",
             limit_start=None if start_after else offset,
             limit_page_length=limit,
         )
+
+        # Resolve the Customer Group tier once per page so the offline cache can
+        # apply the same Customer -> Customer Group -> POS Profile fallback that
+        # get_customer_info() serves online.
+        _attach_customer_group_price_lists(customers)
         return customers
 
     if _pos_profile.get("posa_use_server_cache") and not (limit or offset or start_after or modified_after):
@@ -136,8 +169,10 @@ def get_customer_info(customer):
     res["posa_discount"] = customer.posa_discount
     res["name"] = customer.name
     res["customer_name"] = customer.customer_name
-    res["customer_group_price_list"] = frappe.get_value(
-        "Customer Group", customer.customer_group, "default_price_list"
+    res["customer_group_price_list"] = (
+        frappe.get_cached_value("Customer Group", customer.customer_group, "default_price_list")
+        if customer.customer_group
+        else None
     )
 
     if customer.loyalty_program:

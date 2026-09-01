@@ -107,11 +107,34 @@ def _resolve_effective_price_list(
     pos_profile: str | None,
     fallback_price_list: str | None = None,
 ) -> str | None:
-    customer_price_list = None
+    """Resolve the selling price list: Customer -> Customer Group -> POS Profile.
+
+    Mirrors ``erpnext.accounts.party.get_default_price_list`` without loading the
+    full Customer document, since this runs on the invoice save path. Only the
+    immediate customer group is consulted -- ancestor groups are not walked,
+    matching ERPNext behaviour.
+    """
+
     if customer_name:
-        customer_price_list = frappe.db.get_value("Customer", customer_name, "default_price_list")
-    if customer_price_list:
-        return customer_price_list
+        customer_row = (
+            frappe.db.get_value(
+                "Customer",
+                customer_name,
+                ["default_price_list", "customer_group"],
+                as_dict=True,
+            )
+            or {}
+        )
+        if customer_row.get("default_price_list"):
+            return customer_row["default_price_list"]
+
+        customer_group = customer_row.get("customer_group")
+        if customer_group:
+            group_price_list = frappe.get_cached_value(
+                "Customer Group", customer_group, "default_price_list"
+            )
+            if group_price_list:
+                return group_price_list
 
     if pos_profile:
         profile_price_list = frappe.db.get_value("POS Profile", pos_profile, "selling_price_list")

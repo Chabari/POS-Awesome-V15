@@ -12,7 +12,16 @@ import Dexie from "dexie/dist/dexie.mjs";
 const CACHE_STRUCTURE = {
 	items: ["item_code", "item_name", "item_group", "barcodes", "serials", "batches"],
 	item_prices: ["price_list", "item_code", "price_list_rate", "timestamp"],
-	customers: ["name", "customer_name", "mobile_no", "email_id", "tax_id"],
+	customers: [
+		"name",
+		"customer_name",
+		"mobile_no",
+		"email_id",
+		"tax_id",
+		"customer_group",
+		"customer_price_list",
+		"customer_group_price_list",
+	],
 	local_stock: ["key", "value"],
 	coupons: ["code", "valid_from", "valid_upto"],
 	item_groups: ["name", "parent_item_group"],
@@ -424,6 +433,9 @@ export async function setCustomerStorage(customers) {
 			email_id: c.email_id,
 			primary_address: c.primary_address,
 			tax_id: c.tax_id,
+			customer_group: c.customer_group,
+			customer_price_list: c.customer_price_list,
+			customer_group_price_list: c.customer_group_price_list,
 		}));
 		const CHUNK_SIZE = 1000;
 		await db.transaction("rw", db.table("customers"), async () => {

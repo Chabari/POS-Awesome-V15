@@ -17,6 +17,7 @@ import { useDiscounts } from "../../composables/useDiscounts.js";
 import { useItemAddition } from "../../composables/useItemAddition.js";
 import { useStockUtils } from "../../composables/useStockUtils.js";
 import { parseBooleanSetting } from "../../utils/stock.js";
+import { resolveEffectivePriceList } from "../../utils/priceList.js";
 import stockCoordinator from "../../utils/stockCoordinator.js";
 import { useItemsStore } from "../../stores/itemsStore.js";
 import { usePricingRulesStore } from "../../stores/pricingRulesStore.js";
@@ -4196,8 +4197,10 @@ export default {
 					vm.customer_info = { ...cached };
 					vm.sync_invoice_customer_details(vm.customer_info);
 					if (vm.pos_profile.posa_force_price_from_customer_price_list !== false) {
-						const defaultPriceList = vm.pos_profile?.selling_price_list || null;
-						const resolvedPriceList = cached.customer_price_list || defaultPriceList;
+						const resolvedPriceList = resolveEffectivePriceList(
+							vm.customer_info,
+							vm.pos_profile,
+						);
 						vm.selected_price_list = resolvedPriceList;
 						vm.eventBus.emit("update_customer_price_list", resolvedPriceList);
 						vm.apply_cached_price_list(resolvedPriceList);
@@ -4211,8 +4214,10 @@ export default {
 					vm.customer_info = { ...queued, name: queued.customer_name };
 					vm.sync_invoice_customer_details(vm.customer_info);
 					if (vm.pos_profile.posa_force_price_from_customer_price_list !== false) {
-						const defaultPriceList = vm.pos_profile?.selling_price_list || null;
-						const resolvedPriceList = queued.customer_price_list || defaultPriceList;
+						const resolvedPriceList = resolveEffectivePriceList(
+							vm.customer_info,
+							vm.pos_profile,
+						);
 						vm.selected_price_list = resolvedPriceList;
 						vm.eventBus.emit("update_customer_price_list", resolvedPriceList);
 						vm.apply_cached_price_list(resolvedPriceList);
@@ -4238,16 +4243,21 @@ export default {
 					...message,
 				};
 				vm.sync_invoice_customer_details(vm.customer_info);
-			}
-			// When force reload is enabled, automatically switch to the
-			// customer's default price list so that item rates are fetched
-			// correctly from the server.
-			if (vm.pos_profile.posa_force_price_from_customer_price_list !== false) {
-				const defaultPriceList = vm.pos_profile?.selling_price_list || null;
-				const resolvedPriceList = message.customer_price_list || defaultPriceList;
-				vm.selected_price_list = resolvedPriceList;
-				vm.eventBus.emit("update_customer_price_list", resolvedPriceList);
-				vm.apply_cached_price_list(resolvedPriceList);
+
+				// When force reload is enabled, automatically switch to the
+				// customer's effective price list so that item rates are fetched
+				// correctly from the server. Nested inside the !r.exc guard so a
+				// failed call leaves the current price list untouched instead of
+				// reading price list keys off an undefined payload.
+				if (vm.pos_profile.posa_force_price_from_customer_price_list !== false) {
+					const resolvedPriceList = resolveEffectivePriceList(
+						vm.customer_info,
+						vm.pos_profile,
+					);
+					vm.selected_price_list = resolvedPriceList;
+					vm.eventBus.emit("update_customer_price_list", resolvedPriceList);
+					vm.apply_cached_price_list(resolvedPriceList);
+				}
 			}
 		} catch (error) {
 			console.error("Failed to fetch customer details", error);
@@ -4257,13 +4267,11 @@ export default {
 	// Get price list for current customer
 	get_effective_price_list() {
 		// Benchmark note: keep this resolver O(1) to avoid extra lookups in pricing loops.
-		const customerPriceList = this.customer_info?.customer_price_list || null;
-		const profilePriceList = this.pos_profile?.selling_price_list || null;
-		return customerPriceList || profilePriceList;
+		return resolveEffectivePriceList(this.customer_info, this.pos_profile);
 	},
 
 	get_price_list() {
-		// Customer price list has highest priority, then POS Profile default.
+		// Customer price list, then the customer group's, then the POS Profile default.
 		return this.get_effective_price_list();
 	},
 
@@ -4303,6 +4311,7 @@ export default {
 			"customer_name",
 			"customer_group",
 			"customer_price_list",
+			"customer_group_price_list",
 			"territory",
 			"customer_type",
 			"tax_id",
