@@ -1,6 +1,12 @@
 import { memory } from "./cache.js";
 import { persist } from "./core.js";
 
+// How long a locally cached quantity is trusted before it's treated as stale.
+// (Cross-profile/warehouse contamination is already prevented separately by
+// clearProfileScopedCache() in cache.js, which wipes local_stock_cache on any
+// POS Profile switch.)
+const LOCAL_STOCK_TTL_MS = 15 * 60 * 1000;
+
 // Modify initializeStockCache function to set the flag
 export async function initializeStockCache(items, pos_profile) {
 	try {
@@ -130,7 +136,15 @@ export function updateLocalStock(items) {
 export function getLocalStock(itemCode) {
 	try {
 		const stockCache = memory.local_stock_cache || {};
-		return stockCache[itemCode]?.actual_qty || null;
+		const entry = stockCache[itemCode];
+		if (!entry) {
+			return null;
+		}
+		const lastUpdated = entry.last_updated ? new Date(entry.last_updated).getTime() : 0;
+		if (!lastUpdated || Date.now() - lastUpdated > LOCAL_STOCK_TTL_MS) {
+			return null;
+		}
+		return entry.actual_qty ?? null;
 	} catch (e) {
 		return null;
 	}

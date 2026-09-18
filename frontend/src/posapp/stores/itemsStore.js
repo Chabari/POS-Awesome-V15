@@ -875,7 +875,11 @@ export const useItemsStore = defineStore("items", () => {
 	};
 
 	const generateCacheKey = (search, group, priceList) => {
-		return `items_${search || "all"}_${group}_${priceList || "default"}`;
+		// Scope by POS Profile + warehouse so switching profiles can never serve
+		// another profile/warehouse's cached item list (and stale actual_qty).
+		const profileScope = posProfile.value?.name || "no-profile";
+		const warehouseScope = posProfile.value?.warehouse || "no-warehouse";
+		return `items_${profileScope}_${warehouseScope}_${search || "all"}_${group}_${priceList || "default"}`;
 	};
 
 	// Cache management functions

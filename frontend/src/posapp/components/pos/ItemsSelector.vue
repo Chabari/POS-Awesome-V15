@@ -2821,12 +2821,21 @@ export default {
 
 			let allCached = cacheResult.missing.length === 0;
 			items.forEach((item) => {
-				const localQty = getLocalStock(item.item_code);
-				if (localQty !== null) {
-					item.actual_qty = localQty;
-					vm.captureBaseAvailability(item, localQty);
-					baseRecords.set(item.item_code, localQty);
-				} else {
+				// The local_stock_cache is a warehouse-agnostic, never-expiring
+				// offline fallback. Only trust it when we're offline and have no
+				// fresher data - never let it override a value we just got (or are
+				// about to get) from the warehouse/profile-scoped item details cache
+				// or a live server fetch.
+				if (isOffline() && cacheResult.missing.includes(item.item_code)) {
+					const localQty = getLocalStock(item.item_code);
+					if (localQty !== null) {
+						item.actual_qty = localQty;
+						vm.captureBaseAvailability(item, localQty);
+						baseRecords.set(item.item_code, localQty);
+					} else {
+						allCached = false;
+					}
+				} else if (cacheResult.missing.includes(item.item_code)) {
 					allCached = false;
 				}
 
