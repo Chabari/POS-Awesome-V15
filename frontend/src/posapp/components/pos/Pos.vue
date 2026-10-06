@@ -9,6 +9,7 @@
 		<Returns></Returns>
 		<NewAddress></NewAddress>
 		<MpesaPayments></MpesaPayments>
+		<MobilePaymentDialog></MobilePaymentDialog>
 		<Variants></Variants>
 		<OpeningDialog v-if="dialog" :dialog="dialog"></OpeningDialog>
 		<v-row v-show="!dialog" dense class="ma-0 dynamic-main-row">
@@ -53,6 +54,7 @@ import NewAddress from "./NewAddress.vue";
 import Variants from "./Variants.vue";
 import Returns from "./Returns.vue";
 import MpesaPayments from "./Mpesa-Payments.vue";
+import MobilePaymentDialog from "./MobilePaymentDialog.vue";
 import {
 	getOpeningStorage,
 	setOpeningStorage,
@@ -109,6 +111,7 @@ export default {
 		NewAddress,
 		Variants,
 		MpesaPayments,
+		MobilePaymentDialog,
 		SalesOrders,
 	},
 

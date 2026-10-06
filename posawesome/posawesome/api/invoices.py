@@ -1187,6 +1187,12 @@ def submit_invoice(invoice, data, submit_in_background=False):
         if isinstance(val, (list, dict)):
             invoice_doc.set(fld, json.dumps(val))
 
+    # Refuse an unbacked KCB/M-Pesa line before the receipt prints, while the
+    # customer is still at the counter (no-op without integrated modes).
+    from posawesome.posawesome.api.mobile_payments import validate_mobile_payments
+
+    validate_mobile_payments(invoice_doc)
+
     invoice_doc.flags.ignore_permissions = True
     frappe.flags.ignore_account_permission = True
     invoice_doc.posa_is_printed = 1

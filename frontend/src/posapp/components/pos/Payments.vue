@@ -82,10 +82,26 @@
 
 				<v-divider></v-divider>
 
+				<!-- A confirmed phone prompt for this sale that is not on it yet -->
+				<v-alert v-if="mobile_unclaimed.length" type="warning" density="compact" class="ma-2">
+					<div v-for="p in mobile_unclaimed" :key="p.name" class="d-flex align-center">
+						<span>{{
+							__("The customer already paid {0} by phone prompt ({1}).", [
+								formatCurrency(p.amount),
+								p.receipt,
+							])
+						}}</span>
+						<v-spacer></v-spacer>
+						<v-btn size="small" color="success" variant="flat" @click="use_unclaimed(p)">{{
+							__("Use this payment")
+						}}</v-btn>
+					</div>
+				</v-alert>
+
 				<!-- Payment Inputs (All Payment Methods) -->
 				<div v-if="is_cashback && invoice_doc && Array.isArray(invoice_doc.payments)">
 					<v-row class="payments pa-1" v-for="payment in invoice_doc.payments" :key="payment.name">
-						<v-col cols="6" v-if="!is_mpesa_c2b_payment(payment)">
+						<v-col cols="6" v-if="!is_mpesa_c2b_payment(payment) && !is_mobile_payment(payment)">
 							<v-text-field
 								density="compact"
 								variant="solo"
@@ -101,7 +117,7 @@
 								:readonly="invoice_doc.is_return"
 							></v-text-field>
 						</v-col>
-						<v-col cols="6" v-if="!is_mpesa_c2b_payment(payment)">
+						<v-col cols="6" v-if="!is_mpesa_c2b_payment(payment) && !is_mobile_payment(payment)">
 							<v-btn
 								block
 								color="primary"
@@ -137,6 +153,53 @@
 								</v-btn>
 							</div>
 						</v-col>
+
+						<!-- Mobile payment (KCB Buni / M-Pesa): the amount comes only from attached payments -->
+						<template v-if="is_mobile_payment(payment)">
+							<v-col cols="6">
+								<v-text-field
+									density="compact"
+									variant="solo"
+									color="primary"
+									:label="frappe._(payment.mode_of_payment)"
+									class="sleek-field pos-themed-input"
+									hide-details
+									readonly
+									:model-value="formatCurrency(payment.amount)"
+									:prefix="currencySymbol(invoice_doc.currency)"
+								></v-text-field>
+							</v-col>
+							<v-col cols="6">
+								<v-btn
+									block
+									color="success"
+									theme="dark"
+									class="payment-method-btn"
+									@click="open_mobile_dialog(payment)"
+								>
+									<v-icon start>mdi-cellphone-check</v-icon>{{ payment.mode_of_payment }}
+								</v-btn>
+							</v-col>
+							<v-col
+								cols="12"
+								class="py-0 px-2 mt-n1 mb-1"
+								v-if="(mobile_attached[payment.mode_of_payment] || []).length"
+							>
+								<v-chip
+									v-for="p in mobile_attached[payment.mode_of_payment]"
+									:key="p.name"
+									size="small"
+									color="success"
+									variant="tonal"
+									class="mr-1 mb-1"
+									closable
+									@click:close="detach_mobile(p)"
+								>
+									{{ p.receipt || p.name }} · {{ formatCurrency(p.amount) }}
+									<span v-if="p.payer_name">&nbsp;· {{ p.payer_name }}</span>
+								</v-chip>
+							</v-col>
+						</template>
 
 						<!-- M-Pesa Payment Button (if payment is M-Pesa) -->
 						<v-col cols="12" v-if="is_mpesa_c2b_payment(payment)" class="pl-3">
@@ -1006,6 +1069,9 @@ export default {
 			return_valid_upto_date: null, // Return valid until display date
 			customer_info: "", // Customer info
 			mpesa_modes: [], // List of available M-Pesa modes
+			mobile_modes: {}, // Integrated modes (KCB Buni / M-Pesa) by mode name
+			mobile_attached: {}, // Attached Mobile Payment rows by mode name
+			mobile_unclaimed: [], // Confirmed prompts for this sale not attached yet
 			sales_persons: [], // List of sales persons
 			sales_person: "", // Selected sales person
 			print_formats: [], // List of print formats
@@ -1577,6 +1643,10 @@ export default {
 				if (!payment || !payment.mode_of_payment) {
 					return;
 				}
+				if (this.is_mobile_payment(payment)) {
+					// The receipts of the attached payments; the server re-stamps them.
+					return;
+				}
 
 				const isEnforced = Boolean(this.paymentReferenceEnforcement[payment.mode_of_payment]);
 				const amount = this.flt(payment.amount || 0, this.currency_precision);
@@ -1813,6 +1883,13 @@ export default {
 				}
 
 				if (!this.validateBatchTraySelections()) {
+					return;
+				}
+
+				const mobileProblem = this.mobile_payment_problem();
+				if (mobileProblem) {
+					this.eventBus.emit("show_message", { title: mobileProblem, color: "error" });
+					frappe.utils.play_sound("error");
 					return;
 				}
 
@@ -2072,6 +2149,9 @@ export default {
 				redeemed_customer_credit: this.redeemed_customer_credit,
 				customer_credit_dict: this.customer_credit_dict,
 				is_cashback: this.is_cashback,
+				mobile_payments: Object.values(this.mobile_attached)
+					.flat()
+					.map((p) => p.name),
 				tray_deposit_amount_received: this.flt(this.tray_deposit_amount_received),
 				tray_deposit_summary: this.trayDepositSummary.totalTrays > 0
 					? {
@@ -2352,6 +2432,9 @@ export default {
 				console.log("No payment found for button text:", clickedButton);
 			}
 
+			// Mobile lines keep their attached payments; the clicked line takes the rest.
+			this.reapply_mobile_amounts(clickedPayment);
+
 			// Force Vue to update the view
 			this.normalizePaymentReferences();
 			this.$forceUpdate();
@@ -2360,7 +2443,12 @@ export default {
 		set_rest_amount(idx) {
 			const isReturn = this.invoice_doc.is_return || this.invoiceType === "Return";
 			this.invoice_doc.payments.forEach((payment) => {
-				if (payment.idx === idx && payment.amount === 0 && this.diff_payment > 0) {
+				if (
+					payment.idx === idx &&
+					!this.is_mobile_payment(payment) &&
+					payment.amount === 0 &&
+					this.diff_payment > 0
+				) {
 					let amount = this.diff_payment;
 					if (isReturn) {
 						amount = -Math.abs(amount);
@@ -2378,6 +2466,7 @@ export default {
 			this.invoice_doc.payments.forEach((payment) => {
 				payment.amount = 0;
 			});
+			this.reapply_mobile_amounts();
 		},
 		// Open print page for invoice
 		load_print_page() {
@@ -2772,6 +2861,232 @@ export default {
 				this.eventBus.emit("unfreeze");
 			}
 		},
+		// ---- Mobile payments (KCB Buni / M-Pesa), see api/mobile_payments.py ----
+		load_mobile_modes() {
+			this.mobile_modes = {};
+			if (!this.pos_profile || !this.pos_profile.name) {
+				return;
+			}
+			frappe
+				.call({
+					method: "posawesome.posawesome.api.mobile_payments.get_mobile_modes",
+					args: { pos_profile: this.pos_profile.name },
+				})
+				.then((r) => {
+					const modes = {};
+					((r && r.message) || []).forEach((m) => {
+						modes[m.mode_of_payment] = m;
+					});
+					this.mobile_modes = modes;
+				})
+				.catch(() => {
+					this.mobile_modes = {};
+				});
+		},
+		is_mobile_payment(payment) {
+			return Boolean(
+				payment &&
+					this.mobile_modes[payment.mode_of_payment] &&
+					!(this.invoice_doc && this.invoice_doc.is_return),
+			);
+		},
+		mobile_attached_total(mode) {
+			return (this.mobile_attached[mode] || []).reduce((sum, p) => sum + this.flt(p.amount), 0);
+		},
+		// Mobile rows always equal what is attached; optionally give the rest to adjustPayment.
+		reapply_mobile_amounts(adjustPayment = null) {
+			if (!this.invoice_doc || !Array.isArray(this.invoice_doc.payments)) {
+				return;
+			}
+			const rate = this.invoice_doc.conversion_rate || 1;
+			let mobileTotal = 0;
+			this.invoice_doc.payments.forEach((payment) => {
+				if (!this.is_mobile_payment(payment)) {
+					return;
+				}
+				const attached = this.mobile_attached[payment.mode_of_payment] || [];
+				const amount = this.flt(this.mobile_attached_total(payment.mode_of_payment), this.currency_precision);
+				payment.amount = amount;
+				if (payment.base_amount !== undefined) {
+					payment.base_amount = this.flt(amount * rate, this.currency_precision);
+				}
+				payment.reference_no = attached.map((p) => p.receipt || p.name).join(", ");
+				mobileTotal += amount;
+			});
+			if (adjustPayment && !this.is_mobile_payment(adjustPayment)) {
+				const total = this.invoice_doc.rounded_total || this.invoice_doc.grand_total;
+				adjustPayment.amount = this.flt(Math.max(total - mobileTotal, 0), this.currency_precision);
+			}
+		},
+		apply_mobile_attachments(result) {
+			this.mobile_attached = (result && result.attached) || {};
+			this.mobile_unclaimed = (result && result.unclaimed) || [];
+			this.reapply_mobile_amounts();
+			if (this.invoice_doc && Array.isArray(this.invoice_doc.payments)) {
+				const mobileRow = this.invoice_doc.payments.find(
+					(p) => this.is_mobile_payment(p) && this.flt(p.amount) > 0,
+				);
+				// Bring cash/other lines down if the sale is now over-paid.
+				this.autoBalancePayments(mobileRow || null);
+			}
+			this.$forceUpdate();
+		},
+		async load_mobile_attachments() {
+			this.mobile_attached = {};
+			this.mobile_unclaimed = [];
+			if (
+				!this.invoice_doc ||
+				!this.invoice_doc.name ||
+				!Object.keys(this.mobile_modes).length ||
+				isOffline()
+			) {
+				this.reapply_mobile_amounts();
+				return;
+			}
+			this.reapply_mobile_amounts();
+			try {
+				const r = await frappe.call({
+					method: "posawesome.posawesome.api.mobile_payments.get_attached",
+					args: { invoice: this.invoice_doc.name },
+				});
+				this.apply_mobile_attachments(r && r.message);
+			} catch (e) {
+				console.error("Failed to load mobile payments:", e);
+			}
+		},
+		open_mobile_dialog(payment) {
+			if (isOffline()) {
+				this.eventBus.emit("show_message", {
+					title: __("{0} needs an internet connection.", [payment.mode_of_payment]),
+					color: "error",
+				});
+				return;
+			}
+			if (!this.invoice_doc || !this.invoice_doc.name) {
+				this.eventBus.emit("show_message", { title: __("Save the sale first."), color: "error" });
+				return;
+			}
+			const mode = payment.mode_of_payment;
+			const total = this.flt(this.invoice_doc.rounded_total || this.invoice_doc.grand_total);
+			let otherMobile = 0;
+			let nonMobile = 0;
+			this.invoice_doc.payments.forEach((p) => {
+				if (p.mode_of_payment === mode) {
+					return;
+				}
+				if (this.is_mobile_payment(p)) {
+					otherMobile += this.flt(p.amount);
+				} else {
+					nonMobile += this.flt(p.amount);
+				}
+			});
+			const max = this.flt(total - otherMobile, this.currency_precision);
+			let needed = this.flt(total - otherMobile - nonMobile, this.currency_precision);
+			if (needed <= 0) {
+				// Cash still holds the whole balance (the default line): assume all of it.
+				needed = max;
+			}
+			const cfg = this.mobile_modes[mode];
+			this.eventBus.emit("open_mobile_payment", {
+				invoice: this.invoice_doc.name,
+				mode_of_payment: mode,
+				provider: cfg.provider,
+				account_number: cfg.account_number,
+				can_push: cfg.can_push,
+				amount: needed,
+				max_amount: max,
+				currency: this.invoice_doc.currency,
+				customer: this.invoice_doc.customer,
+			});
+		},
+		async detach_mobile(p) {
+			try {
+				const r = await frappe.call({
+					method: "posawesome.posawesome.api.mobile_payments.detach_payment",
+					args: { invoice: this.invoice_doc.name, payment: p.name },
+				});
+				this.apply_mobile_attachments(r && r.message);
+			} catch (e) {
+				console.error("Failed to remove mobile payment:", e);
+			}
+		},
+		async use_unclaimed(p) {
+			const mode = p.mode_of_payment;
+			const names = (this.mobile_attached[mode] || []).map((x) => x.name).concat([p.name]);
+			try {
+				const r = await frappe.call({
+					method: "posawesome.posawesome.api.mobile_payments.attach_payments",
+					args: {
+						invoice: this.invoice_doc.name,
+						mode_of_payment: mode,
+						payments: names,
+						amount: this.mobile_attached_total(mode) + this.flt(p.amount),
+					},
+				});
+				this.apply_mobile_attachments(r && r.message);
+			} catch (e) {
+				console.error("Failed to use mobile payment:", e);
+			}
+		},
+		// Front-end copy of the server gate (mobile_payments.get_attachment_errors) for fast feedback.
+		mobile_payment_problem() {
+			if (!this.invoice_doc || !Object.keys(this.mobile_modes).length) {
+				return "";
+			}
+			let mobileTotal = 0;
+			for (const payment of this.invoice_doc.payments || []) {
+				const mode = payment.mode_of_payment;
+				const amount = this.flt(payment.amount);
+				if (!this.mobile_modes[mode] || !amount) {
+					continue;
+				}
+				if (this.invoice_doc.is_return || amount < 0) {
+					return __("Refunds cannot be paid out through {0}. Use cash.", [mode]);
+				}
+				if (isOffline()) {
+					return __("{0} needs an internet connection.", [mode]);
+				}
+				if (Math.abs(this.mobile_attached_total(mode) - amount) > 0.05) {
+					return __("{0}: attach the customer's payment with the {0} button.", [mode]);
+				}
+				mobileTotal += amount;
+			}
+			if (this.mobile_unclaimed.length) {
+				return __("The customer already paid {0} by phone prompt. Use that payment before finishing the sale.", [
+					this.formatCurrency(this.mobile_unclaimed[0].amount),
+				]);
+			}
+			const total = this.flt(this.invoice_doc.rounded_total || this.invoice_doc.grand_total);
+			if (mobileTotal - total > 0.05) {
+				return __("Mobile payments ({0}) are more than the sale total ({1}). Remove one.", [
+					this.formatCurrency(mobileTotal),
+					this.formatCurrency(total),
+				]);
+			}
+			return "";
+		},
+		on_mobile_payment_attached(data) {
+			if (data && this.invoice_doc && data.invoice === this.invoice_doc.name) {
+				this.apply_mobile_attachments(data.result);
+			}
+		},
+		on_mobile_push_result(row) {
+			if (!row || row.status !== "Success") {
+				return;
+			}
+			if (this.invoice_doc && this.invoice_doc.name && row.push_invoice === this.invoice_doc.name) {
+				this.load_mobile_attachments();
+			} else if (row.push_invoice) {
+				this.eventBus.emit("show_message", {
+					title: __("Payment {0} ({1}) received for {2}. Finish that sale.", [
+						row.receipt || "",
+						this.formatCurrency(row.amount),
+						row.push_invoice,
+					]),
+					color: "warning",
+				});
+			}
+		},
 		// Get M-Pesa payment modes from backend
 		get_mpesa_modes() {
 			const vm = this;
@@ -3062,7 +3377,7 @@ export default {
 				// Find other payments with amount > 0 to reduce
 				// We filter out the current payment being edited to avoid circular issues
 				const otherPayments = this.invoice_doc.payments.filter(
-					(p) => p !== excludePayment && this.flt(p.amount) > 0,
+					(p) => p !== excludePayment && this.flt(p.amount) > 0 && !this.is_mobile_payment(p),
 				);
 
 				// Sort by amount descending to reduce larger chunks first
@@ -3277,11 +3592,13 @@ export default {
 					this.get_addresses();
 				}
 				this.get_sales_person_names();
+				this.load_mobile_attachments();
 			});
 			this.eventBus.on("register_pos_profile", (data) => {
 				this.pos_profile = data.pos_profile;
 				this.stock_settings = data.stock_settings || {};
 				this.get_mpesa_modes();
+				this.load_mobile_modes();
 				this.get_print_formats();
 			});
 			this.eventBus.on("add_the_new_address", (data) => {
@@ -3324,6 +3641,10 @@ export default {
 			this.eventBus.on("set_mpesa_payment", (data) => {
 				this.set_mpesa_payment(data);
 			});
+			this.eventBus.on("mobile_payment_attached", this.on_mobile_payment_attached);
+			if (frappe.realtime) {
+				frappe.realtime.on("mobile_push_result", this.on_mobile_push_result);
+			}
 			this.eventBus.on("submit_payment_shortcut", this.handleSubmitPaymentShortcut);
 			// Clear any stored invoice when parent emits clear_invoice
 			this.eventBus.on("clear_invoice", () => {
@@ -3333,6 +3654,8 @@ export default {
 				this.return_valid_upto_date = null;
 				this.tray_deposit_amount_received = 0;
 				this.paymentReferenceEnforcement = {};
+				this.mobile_attached = {};
+				this.mobile_unclaimed = [];
 			});
 			// Scroll to top when payment view is shown
 			this.eventBus.on("show_payment", this.handleShowPayment);
@@ -3347,6 +3670,10 @@ export default {
 		this.eventBus.off("update_invoice_type");
 		this.eventBus.off("set_pos_settings");
 		this.eventBus.off("set_mpesa_payment");
+		this.eventBus.off("mobile_payment_attached", this.on_mobile_payment_attached);
+		if (frappe.realtime) {
+			frappe.realtime.off("mobile_push_result", this.on_mobile_push_result);
+		}
 		this.eventBus.off("submit_payment_shortcut", this.handleSubmitPaymentShortcut);
 		this.eventBus.off("clear_invoice");
 		this.eventBus.off("network-online", this.syncPendingInvoices);
