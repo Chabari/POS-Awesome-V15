@@ -1159,10 +1159,10 @@ export default {
 				[item.row_key]: message,
 			};
 		},
-		sharedTankReadingError(item) {
+		unmovedFuelItemError(itemCode, nozzleCount) {
 			return this.__(
-				"This tank is served by {0} nozzles. Enter the actual meter reading for each nozzle before submitting.",
-				[item?.shared_tank_nozzle_count || 0],
+				"{0} was sold this shift, but none of its {1} nozzle meters moved. Enter the actual meter reading for each nozzle before submitting.",
+				[itemCode, nozzleCount],
 			);
 		},
 		closingReadingHint(item) {
@@ -1190,26 +1190,29 @@ export default {
 		netDispensed(row) {
 			return Math.max(this.meterDispensed(row) - Number(row?.test_return_qty || 0), 0);
 		},
-		validateSharedTankClosingReadings() {
+		validateSoldFuelMetersMoved() {
+			// Grouped per fuel item, not per tank, to match the server check:
+			// every invoice line is stamped with the item's first configured
+			// tank, not the tank the fuel was actually pumped from.
 			const groupedRows = new Map();
 			let hasInvalidGroup = false;
 
 			for (const row of this.nozzleClosingReadings) {
-				if (Number(row?.expected_sold_qty || 0) <= 0) {
+				const itemCode = row.fuel_item || "";
+				if (Number(this.fuelInvoicedByItem[itemCode] || 0) <= 0) {
 					continue;
 				}
 
-				const key = `${row.fuel_item || ""}::${row.warehouse || ""}`;
-				if (!groupedRows.has(key)) {
-					groupedRows.set(key, []);
+				if (!groupedRows.has(itemCode)) {
+					groupedRows.set(itemCode, []);
 				}
-				groupedRows.get(key).push(row);
+				groupedRows.get(itemCode).push(row);
 			}
 
-			for (const rows of groupedRows.values()) {
+			for (const [itemCode, rows] of groupedRows) {
 				const allUntouched = rows.every((row) => this.meterDispensed(row) <= 0);
 
-				const errorMessage = this.sharedTankReadingError(rows[0]);
+				const errorMessage = this.unmovedFuelItemError(itemCode, rows.length);
 				if (allUntouched) {
 					hasInvalidGroup = true;
 					rows.forEach((row) => this.setClosingReadingError(row, errorMessage));
@@ -1424,10 +1427,10 @@ export default {
 				return;
 			}
 
-			if (!this.validateSharedTankClosingReadings()) {
+			if (!this.validateSoldFuelMetersMoved()) {
 				alert(
 					this.__(
-						"Tanks that sold fuel require actual nozzle closing readings before submitting.",
+						"Fuel items that sold require actual nozzle closing readings before submitting.",
 					),
 				);
 				return;
@@ -1759,6 +1762,25 @@ export default {
 				this.nozzleClosingReadings.length > 0
 			);
 		},
+		fuelInvoicedByItem() {
+			if (Object.keys(this.fuelSoldByItem || {}).length > 0) {
+				return this.fuelSoldByItem;
+			}
+			// Fallback: expected_sold_qty is a per tank figure repeated on every
+			// nozzle of that tank, so count it once per tank.
+			const invoiced = {};
+			const countedTanks = new Set();
+			for (const row of this.nozzleClosingReadings || []) {
+				const itemCode = row.fuel_item || "";
+				const key = `${itemCode}::${row.warehouse || ""}`;
+				if (countedTanks.has(key)) {
+					continue;
+				}
+				countedTanks.add(key);
+				invoiced[itemCode] = (invoiced[itemCode] || 0) + Number(row.expected_sold_qty || 0);
+			}
+			return invoiced;
+		},
 		fuelReconciliationSummary() {
 			if (!this.showFuelClosingReadingsTable) {
 				return null;
@@ -1767,8 +1789,6 @@ export default {
 			// Grouped per fuel item: AGO and PMS carry different rates, so litres
 			// and money can only be compared item by item, never blended.
 			const byItem = new Map();
-			const hasSoldMap = Object.keys(this.fuelSoldByItem || {}).length > 0;
-			const invoicedByTank = new Map();
 
 			for (const row of this.nozzleClosingReadings) {
 				const itemCode = row.fuel_item || "";
@@ -1776,7 +1796,7 @@ export default {
 					byItem.set(itemCode, {
 						fuel_item: itemCode,
 						metered: 0,
-						invoiced: hasSoldMap ? Number(this.fuelSoldByItem[itemCode] || 0) : 0,
+						invoiced: Number(this.fuelInvoicedByItem[itemCode] || 0),
 						rate: 0,
 					});
 				}
@@ -1784,15 +1804,6 @@ export default {
 				entry.metered += this.netDispensed(row);
 				if (!entry.rate && Number(row.rate || 0) > 0) {
 					entry.rate = Number(row.rate);
-				}
-				if (!hasSoldMap) {
-					// Fallback: expected_sold_qty is a per tank figure repeated on
-					// every nozzle of that tank, so count it once per tank.
-					const key = `${itemCode}::${row.warehouse || ""}`;
-					if (!invoicedByTank.has(key)) {
-						invoicedByTank.set(key, Number(row.expected_sold_qty || 0));
-						entry.invoiced += Number(row.expected_sold_qty || 0);
-					}
 				}
 			}
 
