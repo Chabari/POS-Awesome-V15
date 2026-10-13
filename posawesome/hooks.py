@@ -39,7 +39,7 @@ app_include_css = [
 # include js in doctype views
 doctype_js = {
     "POS Profile": "posawesome/api/pos_profile.js",
-    "Sales Invoice": "posawesome/api/invoice.js",
+    "Sales Invoice": ["posawesome/api/invoice.js", "posawesome/api/mobile_collect.js"],
     "Company": "posawesome/api/company.js",
     "POS Closing Shift": "posawesome/api/pos_closing_shift.js",
 }
@@ -100,17 +100,33 @@ after_uninstall = "posawesome.uninstall.after_uninstall"
 doc_events = {
     "Sales Invoice": {
         "validate": "posawesome.posawesome.api.invoice.validate",
-        "before_submit": "posawesome.posawesome.api.invoice.before_submit",
+        "before_submit": [
+            # Mobile payments first: refuse an unbacked KCB/M-Pesa line before any side effect.
+            "posawesome.posawesome.api.mobile_payments.before_submit",
+            "posawesome.posawesome.api.invoice.before_submit",
+        ],
+        "on_submit": [
+            "posawesome.posawesome.api.invoice.on_submit",
+            "posawesome.posawesome.api.mobile_payments.on_submit",
+        ],
+        "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
+        "on_cancel": [
+            "posawesome.posawesome.api.invoice.on_cancel",
+            "posawesome.posawesome.api.mobile_payments.on_cancel",
+        ],
+    },
+    "POS Invoice": {
+        "validate": "posawesome.posawesome.api.invoice.validate",
+        "before_submit": [
+            "posawesome.posawesome.api.mobile_payments.before_submit",
+            "posawesome.posawesome.api.invoice.before_submit",
+        ],
         "on_submit": "posawesome.posawesome.api.invoice.on_submit",
         "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
         "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
     },
-    "POS Invoice": {
-        "validate": "posawesome.posawesome.api.invoice.validate",
-        "before_submit": "posawesome.posawesome.api.invoice.before_submit",
-        "on_submit": "posawesome.posawesome.api.invoice.on_submit",
-        "before_cancel": "posawesome.posawesome.api.invoice.before_cancel",
-        "on_cancel": "posawesome.posawesome.api.invoice.on_cancel",
+    "Payment Entry": {
+        "on_cancel": "posawesome.posawesome.api.mobile_payments.on_payment_entry_cancel",
     },
     "Customer": {
         "validate": "posawesome.posawesome.api.customer.validate",
@@ -123,6 +139,15 @@ doc_events = {
 
 # Scheduled Tasks
 # ---------------
+
+scheduler_events = {
+    "cron": {
+        "*/10 * * * *": [
+            "posawesome.posawesome.api.mobile_payments.expire_stale_pushes",
+            "posawesome.posawesome.api.mobile_collect.settle_orphaned_desk_pushes",
+        ],
+    },
+}
 
 # scheduler_events = {
 # 	"all": [
@@ -321,6 +346,8 @@ fixtures = [
                     "POS Profile-custom_input_customer_details_pos",
                     "POS Profile-posa_enable_cash_draw",
                     "Mode of Payment-custom_enforce_payment_reference",
+                    "Mode of Payment-account_number",
+                    "Mode of Payment-payment_provider",
                 ),
             ]
         ],

@@ -1,0 +1,427 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "MOBP-.YY.-.######",
+ "creation": "2026-10-06 08:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "provider",
+  "payment_type",
+  "status",
+  "receipt",
+  "bank_reference",
+  "amount",
+  "currency",
+  "column_break_payer",
+  "account_number",
+  "reference",
+  "payer_name",
+  "phone",
+  "received_at",
+  "company",
+  "mode_of_payment",
+  "verified",
+  "allocation_section",
+  "sales_invoice",
+  "attached_at",
+  "attached_by",
+  "consumed",
+  "consumed_at",
+  "payment_entry",
+  "column_break_alloc",
+  "is_hidden",
+  "released_from",
+  "released_from_pos",
+  "released_at",
+  "push_section",
+  "push_request_id",
+  "push_invoice",
+  "push_context",
+  "column_break_push",
+  "push_initiated_by",
+  "push_result",
+  "push_result_at",
+  "source_section",
+  "source_doctype",
+  "source_name",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "provider",
+   "fieldtype": "Select",
+   "label": "Provider",
+   "options": "KCB Buni\nM-Pesa Daraja",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "payment_type",
+   "fieldtype": "Select",
+   "label": "Payment Type",
+   "options": "C2B\nSTK",
+   "default": "C2B",
+   "in_standard_filter": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pending\nSuccess\nFailed",
+   "default": "Success",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "receipt",
+   "fieldtype": "Data",
+   "label": "Receipt",
+   "unique": 1,
+   "in_list_view": 1,
+   "in_global_search": 1,
+   "description": "Provider receipt, e.g. the M-Pesa code. One receipt = one row.",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "bank_reference",
+   "fieldtype": "Data",
+   "label": "Bank Reference",
+   "search_index": 1,
+   "in_global_search": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "label": "Amount",
+   "options": "currency",
+   "in_list_view": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "default": "KES",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "column_break_payer",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "account_number",
+   "fieldtype": "Data",
+   "label": "Account Number",
+   "search_index": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "reference",
+   "fieldtype": "Data",
+   "label": "Payer Reference",
+   "description": "What the payer typed / what we sent as the account reference.",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "payer_name",
+   "fieldtype": "Data",
+   "label": "Payer Name",
+   "in_global_search": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "label": "Phone",
+   "in_global_search": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "received_at",
+   "fieldtype": "Datetime",
+   "label": "Received At",
+   "search_index": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "mode_of_payment",
+   "fieldtype": "Link",
+   "label": "Mode of Payment",
+   "options": "Mode of Payment",
+   "in_standard_filter": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "verified",
+   "fieldtype": "Check",
+   "label": "Signature Verified",
+   "default": "0",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "allocation_section",
+   "fieldtype": "Section Break",
+   "label": "Allocation"
+  },
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "Sales Invoice",
+   "options": "Sales Invoice",
+   "search_index": 1,
+   "in_standard_filter": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "attached_at",
+   "fieldtype": "Datetime",
+   "label": "Attached At",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "attached_by",
+   "fieldtype": "Link",
+   "label": "Attached By",
+   "options": "User",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "consumed",
+   "fieldtype": "Check",
+   "label": "Consumed",
+   "default": "0",
+   "search_index": 1,
+   "in_standard_filter": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "consumed_at",
+   "fieldtype": "Datetime",
+   "label": "Consumed At",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "payment_entry",
+   "fieldtype": "Link",
+   "label": "Payment Entry",
+   "options": "Payment Entry",
+   "search_index": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "column_break_alloc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "is_hidden",
+   "fieldtype": "Check",
+   "label": "Hidden",
+   "default": "0",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "released_from",
+   "fieldtype": "Data",
+   "label": "Released From",
+   "description": "Cancelled invoice / Payment Entry that gave this payment back.",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "released_from_pos",
+   "fieldtype": "Check",
+   "label": "Released From Till Sale",
+   "default": "0",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "released_at",
+   "fieldtype": "Datetime",
+   "label": "Released At",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "push_section",
+   "fieldtype": "Section Break",
+   "label": "Push (STK)",
+   "collapsible": 1,
+   "depends_on": "eval:doc.payment_type=='STK'"
+  },
+  {
+   "fieldname": "push_request_id",
+   "fieldtype": "Data",
+   "label": "Push Request ID",
+   "search_index": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "push_invoice",
+   "fieldtype": "Link",
+   "label": "Pushed For Invoice",
+   "options": "Sales Invoice",
+   "search_index": 1,
+   "description": "Permanent: the sale the prompt was sent for. Never cleared.",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "push_context",
+   "fieldtype": "Select",
+   "label": "Push Context",
+   "options": "\nTill\nDesk",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "column_break_push",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "push_initiated_by",
+   "fieldtype": "Link",
+   "label": "Initiated By",
+   "options": "User",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "push_result",
+   "fieldtype": "Data",
+   "label": "Push Result",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "push_result_at",
+   "fieldtype": "Datetime",
+   "label": "Push Result At",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "source_section",
+   "fieldtype": "Section Break",
+   "label": "Source",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "source_doctype",
+   "fieldtype": "Link",
+   "label": "Source DocType",
+   "options": "DocType",
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "source_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Source Name",
+   "options": "source_doctype",
+   "search_index": 1,
+   "read_only": 1,
+   "no_copy": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks",
+   "read_only": 1,
+   "no_copy": 1
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-06 08:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "POSAwesome",
+ "name": "Mobile Payment",
+ "naming_rule": "Expression (old style)",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "write": 1,
+   "delete": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Accounts Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "write": 1,
+   "share": 1,
+   "email": 1
+  },
+  {
+   "role": "Accounts User",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  },
+  {
+   "role": "Sales Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "receipt",
+ "show_title_field_in_link": 0,
+ "track_changes": 1,
+ "search_fields": "receipt,payer_name,phone,amount,account_number"
+}
