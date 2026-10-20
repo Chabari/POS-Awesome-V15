@@ -341,12 +341,19 @@ def _allocate_item_deficits_to_tanks(dispensed_by_item_warehouse, sold_by_item_w
     """
     dispensed_by_item = _aggregate_by_item(dispensed_by_item_warehouse)
     sold_by_item = _aggregate_by_item(sold_by_item_warehouse)
+    # Meter readings are large floats, so meters that exactly match the sales
+    # leave a residue like 3e-9 litres. Round to the invoice qty precision, or
+    # that residue becomes a deficit line ERPNext rounds to a zero quantity.
+    precision = _get_invoice_qty_precision()
 
     deficit_by_item_warehouse = {}
     for item_code, dispensed_total in dispensed_by_item.items():
         if flt(dispensed_total) <= 0:
             continue
-        deficit_qty = flt(dispensed_total) - max(flt(sold_by_item.get(item_code) or 0), 0)
+        deficit_qty = flt(
+            flt(dispensed_total) - max(flt(sold_by_item.get(item_code) or 0), 0),
+            precision,
+        )
         if deficit_qty <= 0:
             continue
 
@@ -360,12 +367,16 @@ def _allocate_item_deficits_to_tanks(dispensed_by_item_warehouse, sold_by_item_w
             if index == len(tanks) - 1:
                 share = remaining
             else:
-                share = flt(deficit_qty) * flt(qty) / flt(dispensed_total)
-                remaining -= share
+                share = flt(flt(deficit_qty) * flt(qty) / flt(dispensed_total), precision)
+                remaining = flt(remaining - share, precision)
             if share > 0:
                 deficit_by_item_warehouse[(item_code, warehouse)] = flt(share)
 
     return deficit_by_item_warehouse
+
+
+def _get_invoice_qty_precision():
+    return cint(frappe.get_precision("Sales Invoice Item", "qty")) or 3
 
 
 def _update_pos_profile_nozzle_current_readings(pos_profile_doc, nozzle_closing_readings):
@@ -453,14 +464,16 @@ def _create_unreconciled_fuel_invoice(closing_shift_doc, pos_profile_doc, defici
     invoice.remarks = _("Unreconciled fuel quantity invoice generated during POS shift closing.")
 
     price_list = pos_profile_doc.get("selling_price_list")
+    precision = _get_invoice_qty_precision()
     row_warehouses = {}
     for (item_code, warehouse), qty in sorted(deficit_by_item_warehouse.items()):
-        if flt(qty) <= 0:
+        qty = flt(qty, precision)
+        if qty <= 0:
             continue
 
         item_row = {
             "item_code": item_code,
-            "qty": flt(qty),
+            "qty": qty,
             "rate": _get_fuel_item_rate(item_code, price_list),
         }
         if warehouse:
