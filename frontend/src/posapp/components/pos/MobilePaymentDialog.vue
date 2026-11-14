@@ -140,6 +140,9 @@
 					<v-alert type="success" density="compact">
 						{{ __("Payment {0} received.", [push.receipt || ""]) }}
 					</v-alert>
+					<div v-if="autoSeconds > 0" class="text-center text-body-1 mt-3">
+						{{ __("Completing the sale and printing in {0}s…", [autoSeconds]) }}
+					</div>
 				</template>
 			</v-card-text>
 
@@ -151,7 +154,11 @@
 					__("Check status")
 				}}</v-btn>
 				<v-spacer></v-spacer>
-				<v-btn color="error" variant="text" @click="close">{{ __("Close") }}</v-btn>
+				<template v-if="step === 'done' && autoSeconds > 0">
+					<v-btn variant="text" @click="cancel_auto">{{ __("Don't complete") }}</v-btn>
+					<v-btn color="success" variant="flat" @click="complete_now">{{ __("Complete now") }}</v-btn>
+				</template>
+				<v-btn v-else color="error" variant="text" @click="close">{{ __("Close") }}</v-btn>
 				<v-btn
 					v-if="step === 'match'"
 					color="success"
@@ -185,6 +192,7 @@ import format from "../../format";
 const API = "posawesome.posawesome.api.mobile_payments";
 const POLL_MS = 4000;
 const PUSH_SECONDS = 90;
+const AUTO_COMPLETE_SECONDS = 3;
 
 export default {
 	mixins: [format],
@@ -207,6 +215,8 @@ export default {
 		error: "",
 		pollTimer: null,
 		tickTimer: null,
+		autoTimer: null,
+		autoSeconds: 0,
 	}),
 	computed: {
 		wholeAmount() {
@@ -269,8 +279,11 @@ export default {
 		stop_timers() {
 			clearInterval(this.pollTimer);
 			clearInterval(this.tickTimer);
+			clearInterval(this.autoTimer);
 			this.pollTimer = null;
 			this.tickTimer = null;
+			this.autoTimer = null;
+			this.autoSeconds = 0;
 		},
 		timeOnly(value) {
 			return (value || "").slice(11, 16);
@@ -392,12 +405,49 @@ export default {
 				this.push = { ...this.push, ...row };
 				this.step = "done";
 				const r = await frappe.call({ method: `${API}.get_attached`, args: { invoice: this.ctx.invoice } });
-				this.finish(r && r.message, 1200);
+				if (this.should_auto_complete()) {
+					this.start_auto_complete(r && r.message);
+				} else {
+					this.finish(r && r.message, 1200);
+				}
 			} else if (row.status === "Failed") {
 				this.stop_timers();
 				this.push = { ...this.push, ...row };
 				this.step = "failed";
 			}
+		},
+
+		// ---- STK auto-complete (POS Profile: posa_auto_complete_mobile_push) ----
+		should_auto_complete() {
+			return (
+				Boolean(this.ctx.auto_complete) &&
+				this.flt(this.ctx.sale_total) > 0 &&
+				Math.abs(this.flt(this.push.amount || this.amount) - this.flt(this.ctx.sale_total)) <= 0.05
+			);
+		},
+		start_auto_complete(result) {
+			// Show the payment on the sale now; submit & print when the countdown ends.
+			this.eventBus.emit("mobile_payment_attached", { invoice: this.ctx.invoice, result: result || {} });
+			clearInterval(this.autoTimer);
+			this.autoSeconds = AUTO_COMPLETE_SECONDS;
+			this.autoTimer = setInterval(() => {
+				this.autoSeconds = Math.max(this.autoSeconds - 1, 0);
+				if (!this.autoSeconds) {
+					this.complete_now();
+				}
+			}, 1000);
+		},
+		complete_now() {
+			if (!this.autoTimer) return;
+			const invoice = this.ctx.invoice;
+			this.stop_timers();
+			this.dialog = false;
+			this.eventBus.emit("mobile_payment_auto_complete", { invoice });
+		},
+		cancel_auto() {
+			// The payment stays on the sale; the cashier finishes it by hand.
+			this.stop_timers();
+			this.dialog = false;
 		},
 
 		// ---- shared ------------------------------------------------------

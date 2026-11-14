@@ -1069,6 +1069,7 @@ export default {
 			return_valid_upto_date: null, // Return valid until display date
 			customer_info: "", // Customer info
 			mpesa_modes: [], // List of available M-Pesa modes
+			mobile_auto_completing: false, // guard: one auto submit per STK success
 			mobile_modes: {}, // Integrated modes (KCB Buni / M-Pesa) by mode name
 			mobile_attached: {}, // Attached Mobile Payment rows by mode name
 			mobile_unclaimed: [], // Confirmed prompts for this sale not attached yet
@@ -2997,7 +2998,45 @@ export default {
 				max_amount: max,
 				currency: this.invoice_doc.currency,
 				customer: this.invoice_doc.customer,
+				// STK only: submit & print by itself when the prompt pays the whole sale.
+				auto_complete:
+					Boolean(this.pos_profile && this.pos_profile.posa_auto_complete_mobile_push) &&
+					!this.invoice_doc.is_return &&
+					otherMobile <= 0.05,
+				sale_total: total,
 			});
+		},
+		// The dialog's countdown finished after a successful STK push for the full total.
+		async on_mobile_auto_complete(data) {
+			if (!data || !this.invoice_doc || data.invoice !== this.invoice_doc.name) {
+				return;
+			}
+			if (this.loading || this.mobile_auto_completing) {
+				return;
+			}
+			const total = this.flt(this.invoice_doc.rounded_total || this.invoice_doc.grand_total);
+			let mobile = 0;
+			let other = 0;
+			(this.invoice_doc.payments || []).forEach((p) => {
+				if (this.is_mobile_payment(p)) {
+					mobile += this.flt(p.amount);
+				} else {
+					other += this.flt(p.amount);
+				}
+			});
+			if (Math.abs(mobile - total) > 0.05 || Math.abs(other) > 0.05) {
+				this.eventBus.emit("show_message", {
+					title: __("M-Pesa payment received. Check the payments and press Submit & Print."),
+					color: "warning",
+				});
+				return;
+			}
+			this.mobile_auto_completing = true;
+			try {
+				await this.submit(undefined, false, true);
+			} finally {
+				this.mobile_auto_completing = false;
+			}
 		},
 		async detach_mobile(p) {
 			try {
@@ -3642,6 +3681,7 @@ export default {
 				this.set_mpesa_payment(data);
 			});
 			this.eventBus.on("mobile_payment_attached", this.on_mobile_payment_attached);
+			this.eventBus.on("mobile_payment_auto_complete", this.on_mobile_auto_complete);
 			if (frappe.realtime) {
 				frappe.realtime.on("mobile_push_result", this.on_mobile_push_result);
 			}
@@ -3671,6 +3711,7 @@ export default {
 		this.eventBus.off("set_pos_settings");
 		this.eventBus.off("set_mpesa_payment");
 		this.eventBus.off("mobile_payment_attached", this.on_mobile_payment_attached);
+		this.eventBus.off("mobile_payment_auto_complete", this.on_mobile_auto_complete);
 		if (frappe.realtime) {
 			frappe.realtime.off("mobile_push_result", this.on_mobile_push_result);
 		}
