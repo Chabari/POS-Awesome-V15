@@ -137,6 +137,9 @@ doc_events = {
     },
 }
 
+# Mobile-money providers for the Mobile Payment register (see api/mobile_payments.py)
+posawesome_payment_providers = {"M-Pesa Daraja": "posawesome.posawesome.providers.daraja"}
+
 # Scheduled Tasks
 # ---------------
 
