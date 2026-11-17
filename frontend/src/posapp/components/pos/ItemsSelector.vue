@@ -687,7 +687,13 @@ import { useFlyAnimation } from "../../composables/useFlyAnimation.js";
 import { withPerf, perfMarkStart, perfMarkEnd, scheduleFrame } from "../../utils/perf.js";
 import { useCartValidation } from "../../composables/useCartValidation.js";
 import { useItemsIntegration } from "../../composables/useItemsIntegration.js";
-import { parseBooleanSetting, formatStockShortageError, isFuelStockCheckDisabled } from "../../utils/stock.js";
+import {
+	parseBooleanSetting,
+	formatStockShortageError,
+	isFuelStockCheckDisabled,
+	needsLiveStockCheck,
+	fetchLiveStockQty,
+} from "../../utils/stock.js";
 import placeholderImage from "./placeholder-image.png";
 import Skeleton from "../ui/Skeleton.vue";
 import { useCustomersStore } from "../../stores/customersStore.js";
@@ -2157,6 +2163,7 @@ export default {
 
 			// Validate item before adding to cart
 			const requestedQty = this.qty != null ? Math.abs(this.qty) : 1;
+			await this.confirmStockWithServer(item, requestedQty);
 			const isValid = await this.cartValidation.validateCartItem(
 				item,
 				requestedQty,
@@ -4139,6 +4146,7 @@ export default {
 			const requestedQtyRaw =
 				qtyFromBarcode !== null && !isNaN(qtyFromBarcode) ? qtyFromBarcode : (newItem.qty ?? 1);
 			const requestedQty = Math.abs(requestedQtyRaw || 1);
+			await this.confirmStockWithServer(newItem, requestedQty);
 			const availableQty =
 				typeof newItem.available_qty === "number"
 					? newItem.available_qty
@@ -4220,6 +4228,35 @@ export default {
 			} finally {
 				this.awaitingScanResult = false;
 			}
+		},
+		/**
+		 * If the till's saved quantity says `item` can't cover `requestedQty`, ask the
+		 * server for the live warehouse quantity and write it onto `item` (and into
+		 * stockCoordinator, which updates the item list) so the existing stock gates
+		 * decide with live numbers. Keeps the saved number when offline, on a
+		 * timeout or error, or when negative stock would let the sale through anyway.
+		 */
+		async confirmStockWithServer(item, requestedQty) {
+			if (!item || (this.isNegativeStockEnabled(item) && !this.blockSaleBeyondAvailableQty)) {
+				return;
+			}
+			if (isOffline() || !needsLiveStockCheck(item, requestedQty)) {
+				return;
+			}
+			const warehouse = item.warehouse || this.pos_profile?.warehouse;
+			const liveQty = await fetchLiveStockQty(item.item_code, warehouse);
+			if (liveQty === null) {
+				return;
+			}
+
+			const available = liveQty - stockCoordinator.getReserved(item.item_code);
+			item._base_actual_qty = liveQty;
+			item._base_available_qty = liveQty;
+			item.actual_qty = available;
+			item.available_qty = available;
+			stockCoordinator.updateBaseQuantities([{ item_code: item.item_code, actual_qty: liveQty }], {
+				source: "live-stock-check",
+			});
 		},
 		isNegativeStockEnabled(item = null) {
 			if (isFuelStockCheckDisabled(this.pos_profile)) {
